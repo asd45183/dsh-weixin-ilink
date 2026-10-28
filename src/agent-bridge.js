@@ -126,23 +126,31 @@ export class AgentBridge {
     const line = activeLine(accountId, conversationId)
     const record = this.sessions.get(AgentBridge.keyOf(accountId, conversationId, line))
     if (!record) return null
-    try {
-      const current = this.ctx.get('agents')?.selectionFor?.(record.agent)?.current
-      return current === undefined ? null : { ...current }
-    } catch {
-      return null
-    }
+    if (record.pendingModel !== undefined) return { ...record.pendingModel }
+    const header = record.agent.session.requestHeader?.()
+    const config = header?.config
+    return config === undefined
+      ? null
+      : {
+        provider: config.provider,
+        model: config.model,
+        ...(config.reasoningEffort === undefined ? {} : { reasoningEffort: config.reasoningEffort }),
+      }
   }
 
-  /** Install a Session-local selection; it applies to the next model request. */
+  /** Install a Session-local selection through the same host command the GUI uses. */
   async selectModel(accountId, conversationId, selection) {
     const record = await this.#ensureAgent(accountId, conversationId)
-    const agents = this.ctx.get('agents')
-    if (typeof agents?.selectForNextRequest !== 'function') {
-      throw new Error('model switching is unavailable: agents.selectForNextRequest is missing')
+    const controller = this.ctx.get('sessionController')
+    if (typeof controller?.selectModel !== 'function') {
+      throw new Error('model switching is unavailable: sessionController.selectModel is missing')
     }
-    agents.selectForNextRequest(record.agent, { ...selection })
-    return { ...selection }
+    const result = await controller.selectModel({
+      sessionId: record.agent.session.id,
+      ...selection,
+    })
+    record.pendingModel = result?.selected === undefined ? { ...selection } : { ...result.selected }
+    return { ...record.pendingModel }
   }
 
   /**
@@ -297,6 +305,7 @@ export class AgentBridge {
         this.errLog(`turn failed for conv=${safeId(conversationId)}: ${turnError}`)
         return { text: '', error: turnError }
       }
+      record.pendingModel = undefined
       return { text: reply }
     } finally {
       record.active = false

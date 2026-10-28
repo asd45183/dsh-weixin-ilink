@@ -24,6 +24,7 @@ import { inferLifeState, lifeBlock } from '../src/life-state.js'
 import { planCompanionReply, isCompanionMode } from '../src/human-pace.js'
 import { planProactive } from '../src/proactive.js'
 import { formatModelList, listModelChoices, resolveModelChoice } from '../src/model-catalog.js'
+import { AgentBridge } from '../src/agent-bridge.js'
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-weixin-ilink-'))
 process.env.DSH_WEIXIN_OWN_STATE_DIR = tmp
@@ -357,6 +358,32 @@ assert.equal(resolveModelChoice(choices, 'p1/alpha').ok && resolveModelChoice(ch
 assert.equal(resolveModelChoice(choices, 'Alpha').ok && resolveModelChoice(choices, 'Alpha').choice.id, 'alpha')
 assert.equal(resolveModelChoice(choices, 'missing').ok, false)
 assert.match(formatModelList(choices, { provider: 'p1', model: 'beta' }), /当前模型：p1\/beta/u)
+
+
+// --- AgentBridge model switching -------------------------------------------
+{
+  const fakeAgent = {
+    session: {
+      id: 'session-test',
+      requestHeader: () => ({ config: { provider: 'p1', model: 'alpha' } }),
+    },
+  }
+  const calls = []
+  const fakeCtx = {
+    get: (name) => name === 'sessionController'
+      ? { selectModel: async (request) => { calls.push(request); return { selected: { provider: request.provider, model: request.model } } } }
+      : undefined,
+  }
+  const bridge = new AgentBridge({ ctx: fakeCtx, cwd: '/tmp' })
+  bridge.sessions.set(AgentBridge.keyOf('acct', 'conv', 0), {
+    agent: fakeAgent, handle: {}, busy: Promise.resolve(),
+  })
+  assert.deepEqual(bridge.modelFor('acct', 'conv'), { provider: 'p1', model: 'alpha' })
+  const selected = await bridge.selectModel('acct', 'conv', { provider: 'p1', model: 'beta' })
+  assert.deepEqual(selected, { provider: 'p1', model: 'beta' })
+  assert.deepEqual(calls[0], { sessionId: 'session-test', provider: 'p1', model: 'beta' })
+  assert.deepEqual(bridge.modelFor('acct', 'conv'), { provider: 'p1', model: 'beta' })
+}
 
 fs.rmSync(tmp, { recursive: true, force: true })
 console.log('selfcheck OK')

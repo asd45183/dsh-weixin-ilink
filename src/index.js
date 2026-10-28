@@ -72,7 +72,7 @@ import { CDN_ALLOWLIST, downloadMedia, mediaAllowlist } from './media.js'
 
 export const name = 'dsh-weixin-ilink'
 
-export const inject = ['agents', 'agentDefaultModel', 'llm']
+export const inject = ['agents', 'agentDefaultModel']
 
 export const Config = z.object({
   enabled: z.boolean().default(true).description('Start the Weixin long-poll loop when the plugin loads.'),
