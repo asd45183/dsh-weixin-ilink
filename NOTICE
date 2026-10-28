@@ -1,0 +1,16 @@
+dsh-weixin-ilink
+================
+
+This product includes software derived from dsh-plugin-weixin 0.9.8
+(https://github.com/panqing0313/dsh-plugin-weixin), licensed under the MIT
+License, Copyright (c) 2026 dsh-weixin contributors.
+
+Derived files:
+  src/persona.js
+  src/life-state.js
+  src/human-pace.js
+  src/proactive.js
+  src/quiet-hours.js
+
+The transport, media, state and agent-bridge implementation are the
+first-party minimal implementation in this package.

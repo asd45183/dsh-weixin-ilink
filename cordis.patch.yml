@@ -1,0 +1,20 @@
+# dsh-weixin-ilink bundle patch layer: `insert` mounts one plugin row.
+# `name` is the package the loader resolves from the profile's node_modules;
+# `id` is the row's stable identity (what the settings service addresses).
+- insert:
+    - id: dsh-weixin-own
+      name: 'dsh-weixin-ilink'
+      config:
+        enabled: true
+        accountId: ""        # empty = use the only saved account
+        allowedSenders: []   # deny-by-default; add your WeChat id
+        allowFirstContact: false  # set true only for first-run setup; then add allowedSenders
+        maxMessageLength: 2000
+        mediaEnabled: true   # inbound CDN download/decrypt + outbound MEDIA: uploads
+        cdnBaseUrl: ""       # empty = upstream default; set to override the media CDN root
+        mediaTimeoutMs: 120000
+        # "danger-full-access" lets a WeChat message write the whole disk with
+        # no approval prompt — only use it on a trusted account/chat.
+        permissionPreset: workspace-write
+        turnTimeoutMs: 600000      # cancel a turn running longer than 10 min
+        approvalTimeoutMs: 300000  # approval prompt waits 5 min, then fails closed

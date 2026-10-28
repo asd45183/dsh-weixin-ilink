@@ -1,0 +1,71 @@
+{
+  "name": "dsh-weixin-ilink",
+  "version": "0.7.0",
+  "description": "Weixin iLink channel for DeepSeek Harness — text, media, persona modes, companion pacing and proactive messages.",
+  "type": "module",
+  "license": "MIT",
+  "main": "src/index.js",
+  "exports": {
+    ".": "./src/index.js",
+    "./package.json": "./package.json",
+    "./cordis.patch.yml": "./cordis.patch.yml"
+  },
+  "files": [
+    "src",
+    "bin",
+    "cordis.patch.yml",
+    "README.md",
+    "LICENSE",
+    "NOTICE",
+    "SECURITY.md",
+    "test"
+  ],
+  "engines": {
+    "node": ">=22.13.0",
+    "dsh": ">=0.2.1-alpha.4 <0.3.0"
+  },
+  "dependencies": {
+    "@deepseek-ai/schemastery": "~3.18.4"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "^4.0.4",
+    "@deepseek-ai/dsh-agent": ">=0.2.0-rc.1",
+    "@deepseek-ai/dsh-llm": ">=0.2.0-rc.1"
+  },
+  "peerDependenciesMeta": {
+    "@deepseek-ai/cordis": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-agent": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-llm": {
+      "optional": true
+    }
+  },
+  "optionalDependencies": {
+    "qrcode-terminal": "^0.12.0"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "manifestVersion": 1
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "wechat",
+    "weixin",
+    "ilink",
+    "chatbot",
+    "persona"
+  ],
+  "scripts": {
+    "test": "node test/selfcheck.mjs"
+  }
+}
