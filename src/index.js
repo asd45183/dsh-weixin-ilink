@@ -49,6 +49,7 @@ import {
   ensureSessionsDir,
   ensureMediaDir,
   stateDir,
+  activeLine,
   recordConversationInbound,
   listConversations,
   loadProactivePreference,
@@ -154,9 +155,9 @@ export function apply(ctx, config) {
   /** accountId -> { dedup, firstContact } — state is per bound account. */
   const perAccount = new Map()
   for (const id of accounts.keys()) perAccount.set(id, { dedup: new Map(), firstContact: { senderId: '' } })
-  /** `${accountId}\0${conversationId}` -> { settle(outcome) } while an approval is pending. */
+  /** `${accountId}\0${conversationId}\0${line}` -> { settle(outcome) } while an approval is pending. */
   const pendingApprovals = new Map()
-  const approvalKey = (accountId, conversationId) => `${accountId}\0${conversationId}`
+  const approvalKey = (accountId, conversationId, line) => `${accountId}\0${conversationId}\0${line}`
 
   const sendTo = async (accountId, conversationId, text) => {
     const acc = accounts.get(accountId)
@@ -313,7 +314,9 @@ export function apply(ctx, config) {
       const line = `/${command.name}${command.arg.trim() === '' ? '' : ` ${command.arg.trim()}`}`
       try {
         const result = await bridge.forwardCommand(accountId, conversationId, line)
-        const text = result.text ?? (result.kind === 'success' ? '完成。' : '命令未完成。')
+        const text = typeof result.text === 'string' && result.text.trim() !== ''
+          ? result.text
+          : (result.kind === 'success' ? '完成。' : '命令未完成。')
         await sendTo(accountId, conversationId, result.kind === 'error' ? `命令失败：${text}` : text)
       } catch (error) {
         await sendTo(accountId, conversationId, `命令失败：${String(error.message ?? error)}`)
@@ -417,8 +420,8 @@ export function apply(ctx, config) {
   }
 
   /** Prompt the chat for an approval and wait for its y/n reply (or the timeout, which fails closed). */
-  function requestApproval(accountId, conversationId, request) {
-    const key = approvalKey(accountId, conversationId)
+  function requestApproval(accountId, conversationId, line, request) {
+    const key = approvalKey(accountId, conversationId, line)
     return new Promise((resolve) => {
       let settled = false
       let timer
@@ -436,7 +439,7 @@ export function apply(ctx, config) {
       request.signal?.addEventListener?.('abort', () => settle('cancelled'), { once: true })
       pendingApprovals.set(key, { settle })
       const reason = String(request.reason ?? '').trim()
-      void sendTo(accountId, conversationId, `🔐 需要审批\n工具: ${request.toolName}\n${reason ? `原因: ${reason}\n` : ''}\n回复 y 批准(仅本次) / n 拒绝`)
+      void sendTo(accountId, conversationId, `🔐 需要审批（第 ${line + 1} 条线）\n工具: ${request.toolName}\n${reason ? `原因: ${reason}\n` : ''}\n回复 y 批准(仅本次) / n 拒绝`)
     })
   }
 
@@ -445,7 +448,7 @@ export function apply(ctx, config) {
   ctx.on('approval/request', (request, next) => {
     const target = bridge.targetForSession(request.agent?.session?.id)
     if (target === undefined) return next()
-    return requestApproval(target.accountId, target.conversationId, request)
+    return requestApproval(target.accountId, target.conversationId, target.line ?? 0, request)
   })
 
   ctx.effect(() => {
@@ -527,7 +530,7 @@ async function runAccount({ ctx, config, accountId, account, state, bridge, abor
       // feeding the text to the agent (the turn is blocked on this). This
       // check runs BEFORE dedupe, because two approvals may both be
       // answered with the same word inside one dedupe window.
-      const pending = pendingApprovals.get(approvalKey(accountId, msg.conversationId))
+      const pending = pendingApprovals.get(approvalKey(accountId, msg.conversationId, activeLine(accountId, msg.conversationId)))
       if (pending !== undefined) {
         const word = msg.text.trim().toLowerCase()
         if (APPROVE_WORDS.has(word)) {

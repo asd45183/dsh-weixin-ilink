@@ -293,7 +293,7 @@ export class AgentBridge {
     handle ??= await agents.create({ sessionId, meta: { cwd: this.cwd }, ...(agentOptions ? { agentOptions } : {}), setup })
     const record = { handle, agent: handle.agent, busy: Promise.resolve() }
     this.sessions.set(key, record)
-    this.bySession.set(String(handle.agent.session.id), { accountId, conversationId })
+    this.bySession.set(String(handle.agent.session.id), { accountId, conversationId, line })
     // Apply the configured permission preset (sandbox + approval policy) so a
     // WeChat session can write where it needs to; `workspace-write` keeps the
     // default and still requires approval for wider writes.
