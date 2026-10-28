@@ -16,7 +16,7 @@
 import { createHash } from 'node:crypto'
 import { readAssistantReply } from './session-reader.js'
 import { singleFlight } from './memo.js'
-import { activeLine, advanceLine } from './state.js'
+import { activeLine, advanceLine, listLines, setActiveLine } from './state.js'
 
 let createUserMessageRef = null
 async function loadCreateUserMessage() {
@@ -138,6 +138,18 @@ export class AgentBridge {
       }
   }
 
+  /** Forward one host-registered DSH command line to its own handler. */
+  async forwardCommand(accountId, conversationId, line) {
+    const record = await this.#ensureAgent(accountId, conversationId)
+    const commands = this.ctx.get('commands')
+    if (typeof commands?.execute !== 'function') {
+      throw new Error('DSH commands are unavailable: commands.execute is missing')
+    }
+    const execution = await commands.execute(record.agent, line, [], new AbortController().signal)
+    if (execution === undefined) throw new Error(`未知的 DSH 命令：${line}`)
+    return { ...execution.result }
+  }
+
   /** Run the host's own /compact command against this conversation's agent. */
   async compact(accountId, conversationId) {
     const record = await this.#ensureAgent(accountId, conversationId)
@@ -166,6 +178,34 @@ export class AgentBridge {
     })
     record.pendingModel = result?.selected === undefined ? { ...selection } : { ...result.selected }
     return { ...record.pendingModel }
+  }
+
+  /** Lines available for this conversation and the currently active one. */
+  lines(accountId, conversationId) {
+    return { active: activeLine(accountId, conversationId), lines: listLines(accountId, conversationId) }
+  }
+
+  /** Switch to an existing line; the next message opens/reuses that session. */
+  async useLine(accountId, conversationId, line) {
+    const target = Number(line)
+    const active = activeLine(accountId, conversationId)
+    if (!Number.isSafeInteger(target) || target < 0 || target > active) {
+      return { used: false, invalid: true, active }
+    }
+    if (target === active) return { used: true, line: target }
+    const record = this.sessions.get(AgentBridge.keyOf(accountId, conversationId, active))
+    if (record?.active === true) return { used: false, busy: true, active }
+    if (record) {
+      this.sessions.delete(AgentBridge.keyOf(accountId, conversationId, active))
+      this.bySession.delete(String(record.agent.session.id))
+      try {
+        await record.handle.dispose()
+      } catch (error) {
+        this.errLog(`session dispose failed: ${String(error)}`)
+      }
+    }
+    setActiveLine(accountId, conversationId, target)
+    return { used: true, line: target }
   }
 
   /**

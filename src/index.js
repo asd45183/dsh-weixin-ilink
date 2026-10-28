@@ -109,6 +109,7 @@ export const Config = z.object({
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 const DEDUP_TTL_MS = 300_000
 const CANCEL_COMMAND = '/cancel'
+const HOST_COMMANDS = new Set(['plan', 'permission', 'goal', 'feedback', 'export'])
 const APPROVE_WORDS = new Set(['y', 'yes', 'ok', 'approve', '批准', '同意', '允许', '是'])
 const REJECT_WORDS = new Set(['n', 'no', 'reject', '拒绝', '不同意', '否'])
 
@@ -248,6 +249,39 @@ export function apply(ctx, config) {
       ].filter(Boolean).join('\n'))
       return true
     }
+    if (command.name === 'new') {
+      const result = await bridge.clear(accountId, conversationId)
+      await sendTo(accountId, conversationId, result.cleared === true
+        ? `已开启新会话线（第 ${result.line + 1} 条）`
+        : '当前有任务在跑，先 /cancel 再 /new')
+      return true
+    }
+    if (command.name === 'list') {
+      const { active, lines } = bridge.lines(accountId, conversationId)
+      await sendTo(accountId, conversationId, [
+        `会话线（当前第 ${active + 1} 条）：`,
+        ...lines.map((line) => `${line === active ? '→' : '　'}${line + 1}`),
+        '用法：/use <编号> 切换；/new 开新线；/clear 清空当前线',
+      ].join('\n'))
+      return true
+    }
+    if (command.name === 'use') {
+      const raw = command.arg.trim()
+      if (!/^\d+$/.test(raw)) {
+        await sendTo(accountId, conversationId, '用法：/use <编号>；先发 /list 查看')
+        return true
+      }
+      const target = Number(raw) - 1
+      const result = await bridge.useLine(accountId, conversationId, target)
+      if (result.used !== true) {
+        await sendTo(accountId, conversationId, result.busy === true
+          ? '当前有任务在跑，先 /cancel 再切换'
+          : `没有第 ${raw} 条会话线；先发 /list 查看`)
+        return true
+      }
+      await sendTo(accountId, conversationId, `已切到第 ${target + 1} 条会话线，下一条消息生效。`)
+      return true
+    }
     if (command.name === 'clear') {
       const result = await bridge.clear(accountId, conversationId)
       await sendTo(accountId, conversationId, result.cleared === true
@@ -273,6 +307,17 @@ export function apply(ctx, config) {
         `今天已发：${sentToday}`,
         '用法：/proactive on | /proactive off',
       ].join('\n'))
+      return true
+    }
+    if (HOST_COMMANDS.has(command.name)) {
+      const line = `/${command.name}${command.arg.trim() === '' ? '' : ` ${command.arg.trim()}`}`
+      try {
+        const result = await bridge.forwardCommand(accountId, conversationId, line)
+        const text = result.text ?? (result.kind === 'success' ? '完成。' : '命令未完成。')
+        await sendTo(accountId, conversationId, result.kind === 'error' ? `命令失败：${text}` : text)
+      } catch (error) {
+        await sendTo(accountId, conversationId, `命令失败：${String(error.message ?? error)}`)
+      }
       return true
     }
     if (command.name === 'compact') {

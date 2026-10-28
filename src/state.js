@@ -228,6 +228,24 @@ export function activeLine(accountId, conversationId) {
   return Number.isSafeInteger(value) && value > 0 ? value : 0
 }
 
+/** All line numbers for one conversation (0 is the original session). */
+export function listLines(accountId, conversationId) {
+  const active = activeLine(accountId, conversationId)
+  return Array.from({ length: active + 1 }, (_, index) => index)
+}
+
+/** Switch to an existing line without creating a new one. */
+export function setActiveLine(accountId, conversationId, line) {
+  const value = Number(line)
+  if (!Number.isSafeInteger(value) || value < 0) throw new Error('invalid session line')
+  const file = path.join(stateDir(), 'session-lines.json')
+  const raw = readJson(file)
+  const all = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {}
+  all[conversationKey(accountId, conversationId)] = value
+  atomicWrite(file, all)
+  return value
+}
+
 /** Advance to a fresh line (used by /clear). Returns the new line number. */
 export function advanceLine(accountId, conversationId) {
   const file = path.join(stateDir(), 'session-lines.json')

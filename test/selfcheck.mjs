@@ -11,7 +11,7 @@ import os from 'node:os'
 import path from 'node:path'
 import crypto from 'node:crypto'
 import { createServer } from 'node:http'
-import { saveAccount, loadAccount, listAccountIds, registerAccountId, clearAccount, saveContextToken, loadContextToken, recordConversationInbound, listConversations, activeLine, advanceLine } from '../src/state.js'
+import { saveAccount, loadAccount, listAccountIds, registerAccountId, clearAccount, saveContextToken, loadContextToken, recordConversationInbound, listConversations, activeLine, advanceLine, listLines, setActiveLine } from '../src/state.js'
 import { normalizeInbound, isSessionExpired, isStaleSessionRet } from '../src/transport/ilink.js'
 import { chunkText, extractMedia, guessMime, sendMediaFiles } from '../src/outbound.js'
 import { aes128EcbDecrypt, aes128EcbEncrypt, assertSafeMediaUrl, buildMediaItem, downloadMedia, mediaAllowlist, paddedSize, parseAesKey } from '../src/media.js'
@@ -342,6 +342,9 @@ assert.equal(listConversations().find((row) => row.conversationId === 'group@cha
 assert.equal(activeLine('acct2', 'conv2'), 0)
 assert.equal(advanceLine('acct2', 'conv2'), 1)
 assert.equal(activeLine('acct2', 'conv2'), 1)
+assert.deepEqual(listLines('acct2', 'conv2'), [0, 1])
+assert.equal(setActiveLine('acct2', 'conv2', 0), 0)
+assert.equal(activeLine('acct2', 'conv2'), 0)
 
 
 // --- model catalog / /model argument resolution ----------------------------
@@ -390,6 +393,9 @@ assert.match(formatModelList(choices, { provider: 'p1', model: 'beta' }), /å½“å‰
   assert.equal(compacted.kind, 'success')
   assert.equal(compacted.text, 'Compacted 2 items.')
   assert.equal(calls.at(-1).line, '/compact')
+  const forwarded = await bridge.forwardCommand('acct', 'conv', '/plan')
+  assert.equal(forwarded.kind, 'success')
+  assert.equal(calls.at(-1).line, '/plan')
 }
 
 fs.rmSync(tmp, { recursive: true, force: true })

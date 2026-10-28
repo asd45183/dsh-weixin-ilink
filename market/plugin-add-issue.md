@@ -3,7 +3,7 @@
 **插件地址 / Plugin link**
 
 ```text
-dsh-weixin-ilink@0.7.6
+dsh-weixin-ilink@0.7.8
 https://www.npmjs.com/package/dsh-weixin-ilink
 ```
 
