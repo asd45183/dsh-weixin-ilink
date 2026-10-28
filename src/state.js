@@ -185,7 +185,7 @@ function readConversations() {
  * @param {string} conversationId
  * @param {number} [now]
  */
-export function recordConversationInbound(accountId, conversationId, now = Date.now()) {
+export function recordConversationInbound(accountId, conversationId, now = Date.now(), isGroup = false) {
   const all = readConversations()
   const key = conversationKey(accountId, conversationId)
   const day = new Date(now).toISOString().slice(0, 10)
@@ -198,6 +198,7 @@ export function recordConversationInbound(accountId, conversationId, now = Date.
     msgsToday: (sameDay ? Number(prior.msgsToday) || 0 : 0) + 1,
     lastInboundAt: now,
     lastMessageAt: now,
+    isGroup: isGroup === true,
   }
   all[key] = next
   atomicWrite(conversationFile(), all)
@@ -214,6 +215,8 @@ export function listConversations() {
       lastInboundAt: Number(row.lastInboundAt) || 0,
       lastMessageAt: Number(row.lastMessageAt) || 0,
       msgsToday: Number(row.msgsToday) || 0,
+      // Old records predate the flag; WeChat room ids are a safe fallback.
+      isGroup: row.isGroup === true || /@(?:im\.)?chatroom$/i.test(row.conversationId),
     }))
 }
 

@@ -334,6 +334,8 @@ assert.equal(fire.fire, true)
 // --- conversation activity + session lines ---------------------------------
 recordConversationInbound('acct2', 'conv2', now)
 assert.equal(listConversations().some((row) => row.accountId === 'acct2' && row.conversationId === 'conv2'), true)
+recordConversationInbound('acct2', 'group@chatroom', now, true)
+assert.equal(listConversations().find((row) => row.conversationId === 'group@chatroom')?.isGroup, true)
 assert.equal(activeLine('acct2', 'conv2'), 0)
 assert.equal(advanceLine('acct2', 'conv2'), 1)
 assert.equal(activeLine('acct2', 'conv2'), 1)
