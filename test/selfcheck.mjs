@@ -373,7 +373,9 @@ assert.match(formatModelList(choices, { provider: 'p1', model: 'beta' }), /å½“å‰
   const fakeCtx = {
     get: (name) => name === 'sessionController'
       ? { selectModel: async (request) => { calls.push(request); return { selected: { provider: request.provider, model: request.model } } } }
-      : undefined,
+      : name === 'commands'
+        ? { execute: async (agent, line) => { calls.push({ agent, line }); return { result: { kind: 'success', text: 'Compacted 2 items.' } } } }
+        : undefined,
   }
   const bridge = new AgentBridge({ ctx: fakeCtx, cwd: '/tmp' })
   bridge.sessions.set(AgentBridge.keyOf('acct', 'conv', 0), {
@@ -384,6 +386,10 @@ assert.match(formatModelList(choices, { provider: 'p1', model: 'beta' }), /å½“å‰
   assert.deepEqual(selected, { provider: 'p1', model: 'beta' })
   assert.deepEqual(calls[0], { sessionId: 'session-test', provider: 'p1', model: 'beta' })
   assert.deepEqual(bridge.modelFor('acct', 'conv'), { provider: 'p1', model: 'beta' })
+  const compacted = await bridge.compact('acct', 'conv')
+  assert.equal(compacted.kind, 'success')
+  assert.equal(compacted.text, 'Compacted 2 items.')
+  assert.equal(calls.at(-1).line, '/compact')
 }
 
 fs.rmSync(tmp, { recursive: true, force: true })

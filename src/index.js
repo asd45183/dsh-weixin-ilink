@@ -275,6 +275,25 @@ export function apply(ctx, config) {
       ].join('\n'))
       return true
     }
+    if (command.name === 'compact') {
+      const arg = command.arg.trim()
+      if (arg !== '') {
+        await sendTo(accountId, conversationId, '用法：/compact（不带参数）')
+        return true
+      }
+      try {
+        const result = await bridge.compact(accountId, conversationId)
+        const text = result.text === 'No compactable history yet.'
+          ? '还没有可压缩的历史。'
+          : result.text === 'Compaction is unavailable because this process has an active compaction, or the agent is not idle.'
+            ? '当前有任务在跑或已在压缩，暂时不能压缩。'
+            : (result.text ?? (result.kind === 'success' ? '压缩完成。' : '压缩未完成。'))
+        await sendTo(accountId, conversationId, result.kind === 'error' ? `压缩失败：${text}` : text)
+      } catch (error) {
+        await sendTo(accountId, conversationId, `压缩失败：${String(error.message ?? error)}`)
+      }
+      return true
+    }
     if (command.name === 'model' || command.name === 'models') {
       const llm = ctx.get('llm')
       if (typeof llm?.listProviders !== 'function') {

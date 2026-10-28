@@ -138,6 +138,21 @@ export class AgentBridge {
       }
   }
 
+  /** Run the host's own /compact command against this conversation's agent. */
+  async compact(accountId, conversationId) {
+    const record = await this.#ensureAgent(accountId, conversationId)
+    const commands = this.ctx.get('commands')
+    if (typeof commands?.execute !== 'function') {
+      throw new Error('compaction is unavailable: commands.execute is missing')
+    }
+    const controller = new AbortController()
+    const execution = await commands.execute(record.agent, '/compact', [], controller.signal)
+    if (execution === undefined) {
+      throw new Error('compaction is unavailable: the /compact command is not mounted')
+    }
+    return { ...execution.result }
+  }
+
   /** Install a Session-local selection through the same host command the GUI uses. */
   async selectModel(accountId, conversationId, selection) {
     const record = await this.#ensureAgent(accountId, conversationId)

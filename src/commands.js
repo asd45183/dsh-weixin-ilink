@@ -14,6 +14,7 @@ export const HELP_TEXT = [
   '/models —— 只列出可用模型（等同 /model 无参数）',
   '/mode —— 查看人格模式；/mode 女友 切换模式',
   '/status —— 账号、模式、会话、白名单、主动消息状态',
+  '/compact —— 立即压缩当前会话的较早历史',
   '/clear —— 清空当前会话，下一条消息开新会话',
   '/proactive —— 查看主动消息；/proactive on|off 开关',
   '',

@@ -161,6 +161,7 @@ WeChat conversation groups together in the GUI, separate from the deployment cwd
 | `/models` | list only; `/model list` is an alias |
 | `/mode` | list persona modes; `/mode 女友` switches (and opens a new line) |
 | `/status` | account, mode, session id, allowlist count, life state, proactive status |
+| `/compact` | compact older history now (same as the Web `/compact`) |
 | `/clear` | clear the current context and open a fresh line |
 | `/proactive on\|off` | toggle proactive messages for this account |
 | `y` / `n` | answer a pending approval prompt (`批准`/`拒绝` also work) |
