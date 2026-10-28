@@ -1,6 +1,6 @@
 {
   "name": "dsh-weixin-ilink",
-  "version": "0.7.4",
+  "version": "0.7.5",
   "description": "Weixin iLink channel for DeepSeek Harness — text, media, persona modes, companion pacing and proactive messages.",
   "type": "module",
   "license": "MIT",

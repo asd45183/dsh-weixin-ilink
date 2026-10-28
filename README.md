@@ -158,6 +158,7 @@ WeChat conversation groups together in the GUI, separate from the deployment cwd
 |---|---|
 | `/cancel` | interrupt the running turn (bypasses the per-conversation queue) |
 | `/model` | list models; `/model 2` or `/model provider/model` switches for the next request |
+| `/models` | list only; `/model list` is an alias |
 | `/mode` | list persona modes; `/mode 女友` switches (and opens a new line) |
 | `/status` | account, mode, session id, allowlist count, life state, proactive status |
 | `/clear` | clear the current context and open a fresh line |

@@ -268,6 +268,7 @@ assert.throws(() => assertSafeMediaUrl('ftp://novac2c.cdn.weixin.qq.com/x'), /sc
 assert.deepEqual(parseCommand('/help'), { name: 'help', arg: '' })
 assert.deepEqual(parseCommand('  /CANCEL  '), { name: 'cancel', arg: '' })
 assert.deepEqual(parseCommand('/remind 10m 喝水'), { name: 'remind', arg: '10m 喝水' })
+assert.deepEqual(parseCommand('/models'), { name: 'models', arg: '' })
 assert.equal(parseCommand('hello /help'), null)
 assert.equal(parseCommand(''), null)
 assert.equal(isMentioned('@bot 在吗'), true)

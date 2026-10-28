@@ -275,7 +275,7 @@ export function apply(ctx, config) {
       ].join('\n'))
       return true
     }
-    if (command.name === 'model') {
+    if (command.name === 'model' || command.name === 'models') {
       const llm = ctx.get('llm')
       if (typeof llm?.listProviders !== 'function') {
         await sendTo(accountId, conversationId, '模型服务不可用。')
@@ -286,7 +286,8 @@ export function apply(ctx, config) {
         ?? ctx.get('agentDefaultModel')?.currentSelection?.()
         ?? null
       const arg = command.arg.trim()
-      if (arg === '') {
+      const listOnly = command.name === 'models' || arg.toLowerCase() === 'list' || arg === '列表'
+      if (listOnly || arg === '') {
         await sendTo(accountId, conversationId, formatModelList(choices, current))
         return true
       }
