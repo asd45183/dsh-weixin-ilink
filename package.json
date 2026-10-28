@@ -67,5 +67,10 @@
   ],
   "scripts": {
     "test": "node test/selfcheck.mjs"
-  }
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/asd45183/dsh-weixin-ilink.git"
+  },
+  "homepage": "https://github.com/asd45183/dsh-weixin-ilink#readme"
 }
