@@ -3,10 +3,11 @@
 **插件地址 / Plugin link**
 
 ```text
-dsh-weixin-ilink
+dsh-weixin-ilink@0.7.0
+https://www.npmjs.com/package/dsh-weixin-ilink
 ```
 
-（npm 包；公开源码仓库：`https://github.com/asd45183/dsh-weixin-ilink`）
+公开源码仓库：`https://github.com/asd45183/dsh-weixin-ilink`
 
 **简短说明 / Summary**
 
