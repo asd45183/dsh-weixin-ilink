@@ -121,6 +121,30 @@ export class AgentBridge {
     return sessionIdForLine(accountId, conversationId, activeLine(accountId, conversationId))
   }
 
+  /** The model this conversation will use, or null before its agent exists. */
+  modelFor(accountId, conversationId) {
+    const line = activeLine(accountId, conversationId)
+    const record = this.sessions.get(AgentBridge.keyOf(accountId, conversationId, line))
+    if (!record) return null
+    try {
+      const current = this.ctx.get('agents')?.selectionFor?.(record.agent)?.current
+      return current === undefined ? null : { ...current }
+    } catch {
+      return null
+    }
+  }
+
+  /** Install a Session-local selection; it applies to the next model request. */
+  async selectModel(accountId, conversationId, selection) {
+    const record = await this.#ensureAgent(accountId, conversationId)
+    const agents = this.ctx.get('agents')
+    if (typeof agents?.selectForNextRequest !== 'function') {
+      throw new Error('model switching is unavailable: agents.selectForNextRequest is missing')
+    }
+    agents.selectForNextRequest(record.agent, { ...selection })
+    return { ...selection }
+  }
+
   /**
    * Start a fresh line: dispose the active agent and advance the persisted line
    * number, so the next message creates a new session instead of resuming the

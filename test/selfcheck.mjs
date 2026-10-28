@@ -23,6 +23,7 @@ import { readPersonaStore, resolveMode, setActiveMode, activeModeFor, buildPerso
 import { inferLifeState, lifeBlock } from '../src/life-state.js'
 import { planCompanionReply, isCompanionMode } from '../src/human-pace.js'
 import { planProactive } from '../src/proactive.js'
+import { formatModelList, listModelChoices, resolveModelChoice } from '../src/model-catalog.js'
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-weixin-ilink-'))
 process.env.DSH_WEIXIN_OWN_STATE_DIR = tmp
@@ -339,6 +340,23 @@ assert.equal(listConversations().find((row) => row.conversationId === 'group@cha
 assert.equal(activeLine('acct2', 'conv2'), 0)
 assert.equal(advanceLine('acct2', 'conv2'), 1)
 assert.equal(activeLine('acct2', 'conv2'), 1)
+
+
+// --- model catalog / /model argument resolution ----------------------------
+const fakeLlm = {
+  listProviders: () => [{ id: 'p1', name: 'Provider One' }, { id: 'bad', name: 'Broken' }],
+  async listModels(id) {
+    if (id === 'bad') throw new Error('offline')
+    return [{ id: 'alpha', name: 'Alpha' }, { id: 'beta', name: 'Beta' }]
+  },
+}
+const choices = await listModelChoices(fakeLlm)
+assert.deepEqual(choices.map(choice => `${choice.provider}/${choice.id}`), ['p1/alpha', 'p1/beta'])
+assert.equal(resolveModelChoice(choices, '2').ok && resolveModelChoice(choices, '2').choice.id, 'beta')
+assert.equal(resolveModelChoice(choices, 'p1/alpha').ok && resolveModelChoice(choices, 'p1/alpha').choice.id, 'alpha')
+assert.equal(resolveModelChoice(choices, 'Alpha').ok && resolveModelChoice(choices, 'Alpha').choice.id, 'alpha')
+assert.equal(resolveModelChoice(choices, 'missing').ok, false)
+assert.match(formatModelList(choices, { provider: 'p1', model: 'beta' }), /当前模型：p1\/beta/u)
 
 fs.rmSync(tmp, { recursive: true, force: true })
 console.log('selfcheck OK')

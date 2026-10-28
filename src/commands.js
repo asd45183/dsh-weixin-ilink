@@ -10,6 +10,7 @@ export const HELP_TEXT = [
   '可用命令：',
   '/help —— 显示这份帮助',
   '/cancel —— 中断当前正在跑的轮次',
+  '/model —— 查看/切换模型；/model 2 或 /model provider/model',
   '/mode —— 查看人格模式；/mode 女友 切换模式',
   '/status —— 账号、模式、会话、白名单、主动消息状态',
   '/clear —— 清空当前会话，下一条消息开新会话',

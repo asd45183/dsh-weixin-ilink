@@ -66,12 +66,13 @@ import {
 import { isCompanionMode, planCompanionReply, buildHumanStyleBlock } from './human-pace.js'
 import { lifeBlock, lifeSummary, readOrInferLifeState } from './life-state.js'
 import { ProactiveScheduler, describePlan } from './proactive.js'
+import { formatModelList, listModelChoices, resolveModelChoice } from './model-catalog.js'
 import { extractMedia, sendReply, sendMediaFiles } from './outbound.js'
 import { CDN_ALLOWLIST, downloadMedia, mediaAllowlist } from './media.js'
 
 export const name = 'dsh-weixin-ilink'
 
-export const inject = ['agents', 'agentDefaultModel']
+export const inject = ['agents', 'agentDefaultModel', 'llm']
 
 export const Config = z.object({
   enabled: z.boolean().default(true).description('Start the Weixin long-poll loop when the plugin loads.'),
@@ -192,6 +193,9 @@ export function apply(ctx, config) {
       const rows = []
       for (const row of listConversations()) {
         if (!accounts.has(row.accountId)) continue
+        // Proactive messages are DM-only and require the sender to still be
+        // in the allowlist; a stale conversation must not outlive a removal.
+        if (row.isGroup === true || !config.allowedSenders.includes(row.conversationId)) continue
         const modeId = activeModeFor(stateRoot, row.accountId, row.conversationId, config.personaDefaultMode, { warn })
         const mode = resolveMode(modes, modeId)
         if (!isCompanionMode(mode)) continue
@@ -230,8 +234,12 @@ export function apply(ctx, config) {
       const life = readOrInferLifeState(stateRoot, accountId, { warn })
       const proactive = proactiveScheduler.status(accountId)
       const sentToday = proactive.day === new Date().toISOString().slice(0, 10) ? proactive.count : 0
+      const currentModel = bridge.modelFor(accountId, conversationId)
+        ?? ctx.get('agentDefaultModel')?.currentSelection?.()
+        ?? null
       await sendTo(accountId, conversationId, [
         `账号：${accountId}`,
+        `模型：${currentModel === null ? '未知' : `${currentModel.provider}/${currentModel.model}`}`,
         `模式：${mode.name}（${mode.id}）`,
         `会话：${bridge.sessionId(accountId, conversationId)}`,
         `白名单：${config.allowedSenders.length} 个发送者`,
@@ -265,6 +273,51 @@ export function apply(ctx, config) {
         `今天已发：${sentToday}`,
         '用法：/proactive on | /proactive off',
       ].join('\n'))
+      return true
+    }
+    if (command.name === 'model') {
+      const llm = ctx.get('llm')
+      if (typeof llm?.listProviders !== 'function') {
+        await sendTo(accountId, conversationId, '模型服务不可用。')
+        return true
+      }
+      const choices = await listModelChoices(llm)
+      const current = bridge.modelFor(accountId, conversationId)
+        ?? ctx.get('agentDefaultModel')?.currentSelection?.()
+        ?? null
+      const arg = command.arg.trim()
+      if (arg === '') {
+        await sendTo(accountId, conversationId, formatModelList(choices, current))
+        return true
+      }
+      if (arg.toLowerCase() === 'default' || arg === '默认') {
+        const fallback = ctx.get('agentDefaultModel')?.currentSelection?.()
+        if (fallback === undefined) {
+          await sendTo(accountId, conversationId, '没有可用的默认模型。')
+          return true
+        }
+        try {
+          await bridge.selectModel(accountId, conversationId, fallback)
+          await sendTo(accountId, conversationId, `已切回默认模型 ${fallback.provider}/${fallback.model}，下一条消息生效。`)
+        } catch (error) {
+          await sendTo(accountId, conversationId, `切换失败：${String(error.message ?? error)}`)
+        }
+        return true
+      }
+      const matched = resolveModelChoice(choices, arg)
+      if (matched.ok !== true) {
+        await sendTo(accountId, conversationId, `${matched.reason}\n\n${formatModelList(choices, current)}`)
+        return true
+      }
+      try {
+        await bridge.selectModel(accountId, conversationId, {
+          provider: matched.choice.provider,
+          model: matched.choice.id,
+        })
+        await sendTo(accountId, conversationId, `已切换到 ${matched.choice.provider}/${matched.choice.id}（${matched.choice.name}），下一条消息生效。`)
+      } catch (error) {
+        await sendTo(accountId, conversationId, `切换失败：${String(error.message ?? error)}`)
+      }
       return true
     }
     if (command.name === 'mode') {
@@ -583,7 +636,7 @@ async function handleInbound({ ctx, config, account, accountId, bridge, msg, log
     }
   }
   log(`inbound from=${safeId(msg.senderId)} conv=${safeId(msg.conversationId)} len=${msg.text.length} media=${msg.media?.length ?? 0}`)
-  const bond = recordConversationInbound(accountId, msg.conversationId, Date.now())
+  const bond = recordConversationInbound(accountId, msg.conversationId, Date.now(), msg.isGroup === true)
   proactiveScheduler?.noteInbound(accountId)
   const modes = readPersonaStore(stateRoot, { warn })
   const activeModeId = activeModeFor(stateRoot, accountId, msg.conversationId, config.personaDefaultMode, { warn })
