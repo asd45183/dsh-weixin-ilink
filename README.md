@@ -26,6 +26,7 @@ Weixin iLink channel plugin for DeepSeek Harness — text, media, persona modes,
 - [x] `/help`, `/status`, `/clear`, `/proactive` (answered locally, never reach the agent)
 - [x] `/mode` persona modes (default assistant + 11 companion modes) with per-conversation overrides
 - [x] Life-state block (mood/energy/activity) and companion pacing (first-bubble delay + 2–3 bubbles)
+- [x] Persona/style/life/attachment hints are injected as hidden context; the visible user message stays clean
 - [x] Proactive messages (off by default; companion modes only; window/min-gap/backoff/daily cap)
 - [x] Typing indicator (best-effort, `typingIndicator`)
 - [x] "Still working" note for long turns (`progressAfterMs`)

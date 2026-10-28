@@ -201,15 +201,17 @@ export function apply(ctx, config) {
     },
     fire: async (candidate) => {
       const life = readOrInferLifeState(stateRoot, candidate.accountId, { warn })
-      const prompt = [
-        buildPersonaBlock(candidate.mode),
-        buildHumanStyleBlock(),
-        lifeBlock(life),
-        '<weixin_proactive>',
-        `现在是 ${new Date().toLocaleString('zh-CN', { hour12: false })}。你已经一段时间没收到对方消息了。主动发一条简短、自然、像在微信上开口的消息；不要提到“主动消息”、系统提示或时间间隔。`,
-        '</weixin_proactive>',
-      ].filter(Boolean).join('\n')
-      const reply = await bridge.deliver({ accountId: candidate.accountId, conversationId: candidate.conversationId, text: prompt })
+      const contextSections = [
+        { name: 'weixin-persona', text: buildPersonaBlock(candidate.mode) },
+        { name: 'weixin-style', text: buildHumanStyleBlock() },
+        { name: 'weixin-life', text: lifeBlock(life) },
+        { name: 'weixin-proactive', text: [
+          '<weixin_proactive>',
+          `现在是 ${new Date().toLocaleString('zh-CN', { hour12: false })}。你已经一段时间没收到对方消息了。主动发一条简短、自然、像在微信上开口的消息；不要提到“主动消息”、系统提示或时间间隔。`,
+          '</weixin_proactive>',
+        ].join('\n') },
+      ].filter((section) => section.text !== '')
+      const reply = await bridge.deliver({ accountId: candidate.accountId, conversationId: candidate.conversationId, text: '（主动开口）', contextSections })
       if (reply.error !== undefined) throw new Error(reply.error)
       const { text } = extractMedia(reply.text || '')
       if (!text.trim()) return ''
@@ -611,7 +613,16 @@ async function handleInbound({ ctx, config, account, accountId, bridge, msg, log
   const mediaHint = config.mediaEnabled === false
     ? ''
     : '（发图片/文件时，在回复中单独一行写 MEDIA:/绝对路径，插件会上传发送；图片用 PNG/JPG。）'
-  const agentText = [personaBlock, styleBlock, lifeBlockText, msg.text, ...attachmentLines, mediaHint].filter(Boolean).join('\n')
+  const contextSections = [
+    { name: 'weixin-persona', text: personaBlock },
+    { name: 'weixin-style', text: styleBlock },
+    { name: 'weixin-life', text: lifeBlockText },
+    { name: 'weixin-attachments', text: attachmentLines.join('\n') },
+    { name: 'weixin-media-hint', text: mediaHint },
+  ].filter((section) => section.text !== '')
+  const userText = msg.text.trim() !== ''
+    ? msg.text
+    : (attachmentLines.length > 0 ? '（附件）' : '（空消息）')
 
   // Cosmetic typing indicator + a single "still working" note for long turns.
   const typingUser = msg.senderId
@@ -627,7 +638,7 @@ async function handleInbound({ ctx, config, account, accountId, bridge, msg, log
 
   let reply
   try {
-    reply = await bridge.deliver({ accountId, conversationId: msg.conversationId, text: agentText })
+    reply = await bridge.deliver({ accountId, conversationId: msg.conversationId, text: userText, contextSections })
   } catch (error) {
     errLog(`agent delivery failed: ${String(error)}`)
     return

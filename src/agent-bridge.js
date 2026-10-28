@@ -225,7 +225,7 @@ export class AgentBridge {
    * the next user message.
    * @returns {Promise<{ text: string, error?: string }>}
    */
-  async deliver({ accountId, conversationId, text }) {
+  async deliver({ accountId, conversationId, text, contextSections = [] }) {
     const record = await this.#ensureAgent(accountId, conversationId)
     const previous = record.busy
     let release
@@ -236,6 +236,15 @@ export class AgentBridge {
       const afterSeq = record.agent.session.seq
       record.active = true
       record.cancelledByUser = false
+      const sections = Array.isArray(contextSections)
+        ? contextSections.filter((section) => section !== null && typeof section.text === 'string' && section.text.trim() !== '')
+        : []
+      if (sections.length > 0) {
+        record.agent.inject(createUserMessage({
+          content: [{ type: 'text', text: sections.map((section) => section.text).join('\n\n') }],
+          source: { kind: 'weixin-context', form: 'snapshot', sections },
+        }))
+      }
       record.agent.followup(createUserMessage({
         content: [{ type: 'text', text }],
         source: { kind: 'user' },
