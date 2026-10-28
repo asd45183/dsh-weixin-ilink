@@ -14,6 +14,7 @@ export const HELP_TEXT = [
   '/models —— 只列出可用模型（等同 /model 无参数）',
   '/mode —— 查看人格模式；/mode 女友 切换模式',
   '/status —— 账号、模式、会话、白名单、主动消息状态',
+  '/trust 10m —— 当前会话线限时免批；/trust off 关闭',
   '/plan /permission /goal /feedback /export —— 转发给 DSH 原生命令',
   '/new —— 开一条新会话线',
   '/list —— 列出会话线',

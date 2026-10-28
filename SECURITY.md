@@ -8,6 +8,7 @@
 - **Media:** inbound CDN URLs are checked against an explicit WeChat CDN host
   allowlist before a socket opens (SSRF protection). No `readLinks`.
 - **Every inbound path** — agent turns, approval replies, `/cancel` and local commands — passes the allowlist/group gate before it runs.
+- **Timed trust:** `/trust 10m` auto-allows approval requests on the current session line until it expires (max 8h, in-memory). It only skips approval prompts; sandbox and tool guards still apply. Use only on a trusted chat.
 - **Allowlist:** empty `allowedSenders` denies everyone unless `allowFirstContact: true` is set for first-run setup. Keep it false on a public bot.
 - **Scope:** the plugin runs host code and can drive a DSH agent with the profile's
   permission preset. Review `permissionPreset` before using a trusted chat.

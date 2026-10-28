@@ -68,6 +68,7 @@ import { isCompanionMode, planCompanionReply, buildHumanStyleBlock } from './hum
 import { lifeBlock, lifeSummary, readOrInferLifeState } from './life-state.js'
 import { ProactiveScheduler, describePlan } from './proactive.js'
 import { formatModelList, listModelChoices, resolveModelChoice } from './model-catalog.js'
+import { TrustStore, parseTrustDuration } from './trust.js'
 import { extractMedia, sendReply, sendMediaFiles } from './outbound.js'
 import { CDN_ALLOWLIST, downloadMedia, mediaAllowlist } from './media.js'
 
@@ -158,6 +159,7 @@ export function apply(ctx, config) {
   /** `${accountId}\0${conversationId}\0${line}` -> { settle(outcome) } while an approval is pending. */
   const pendingApprovals = new Map()
   const approvalKey = (accountId, conversationId, line) => `${accountId}\0${conversationId}\0${line}`
+  const trust = new TrustStore()
 
   const sendTo = async (accountId, conversationId, text) => {
     const acc = accounts.get(accountId)
@@ -310,6 +312,33 @@ export function apply(ctx, config) {
       ].join('\n'))
       return true
     }
+    if (command.name === 'trust' || command.name === 'approve') {
+      const line = activeLine(accountId, conversationId)
+      const key = approvalKey(accountId, conversationId, line)
+      const arg = command.arg.trim().toLowerCase()
+      if (arg === '' || arg === 'status') {
+        const left = trust.remainingMs(key)
+        await sendTo(accountId, conversationId, left === 0
+          ? '当前会话线未开启免批。用法：/trust 10m（最长 8 小时）'
+          : `当前会话线免批剩余 ${Math.ceil(left / 60_000)} 分钟。`)
+        return true
+      }
+      if (arg === 'off' || arg === '关闭') {
+        trust.revoke(key)
+        await sendTo(accountId, conversationId, '已关闭当前会话线的免批。')
+        return true
+      }
+      const parsed = parseTrustDuration(arg)
+      if (parsed.ok !== true) {
+        await sendTo(accountId, conversationId, parsed.reason)
+        return true
+      }
+      trust.grant(key, parsed.ms)
+      const pending = pendingApprovals.get(key)
+      if (pending !== undefined) pending.settle('allowed-once')
+      await sendTo(accountId, conversationId, `已开启免批 ${Math.round(parsed.ms / 60_000)} 分钟（仅当前会话线，到期自动恢复审批）。`)
+      return true
+    }
     if (HOST_COMMANDS.has(command.name)) {
       const line = `/${command.name}${command.arg.trim() === '' ? '' : ` ${command.arg.trim()}`}`
       try {
@@ -448,7 +477,11 @@ export function apply(ctx, config) {
   ctx.on('approval/request', (request, next) => {
     const target = bridge.targetForSession(request.agent?.session?.id)
     if (target === undefined) return next()
-    return requestApproval(target.accountId, target.conversationId, target.line ?? 0, request)
+    const line = target.line ?? 0
+    if (trust.active(approvalKey(target.accountId, target.conversationId, line))) {
+      return Promise.resolve('allowed-once')
+    }
+    return requestApproval(target.accountId, target.conversationId, line, request)
   })
 
   ctx.effect(() => {

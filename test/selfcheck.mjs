@@ -24,6 +24,7 @@ import { inferLifeState, lifeBlock } from '../src/life-state.js'
 import { planCompanionReply, isCompanionMode } from '../src/human-pace.js'
 import { planProactive } from '../src/proactive.js'
 import { formatModelList, listModelChoices, resolveModelChoice } from '../src/model-catalog.js'
+import { MAX_TRUST_MS, TrustStore, parseTrustDuration } from '../src/trust.js'
 import { AgentBridge } from '../src/agent-bridge.js'
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-weixin-ilink-'))
@@ -397,6 +398,21 @@ assert.match(formatModelList(choices, { provider: 'p1', model: 'beta' }), /å½“å‰
   assert.equal(forwarded.kind, 'success')
   assert.equal(calls.at(-1).line, '/plan')
 }
+
+
+// --- timed approval trust --------------------------------------------------
+assert.equal(parseTrustDuration('10m').ok, true)
+assert.equal(parseTrustDuration('10m').ms, 10 * 60_000)
+assert.equal(parseTrustDuration('1h').ms, 60 * 60_000)
+assert.equal(parseTrustDuration('30').ms, 30 * 60_000)
+assert.equal(parseTrustDuration('0').ok, false)
+assert.equal(parseTrustDuration(String(MAX_TRUST_MS / 60_000 + 1)).ok, false)
+const trust = new TrustStore()
+trust.grant('k', 60_000, 1000)
+assert.equal(trust.active('k', 1001), true)
+assert.equal(trust.remainingMs('k', 1001), 59_999)
+assert.equal(trust.active('k', 61_001), false)
+assert.equal(trust.remainingMs('k', 61_001), 0)
 
 fs.rmSync(tmp, { recursive: true, force: true })
 console.log('selfcheck OK')
