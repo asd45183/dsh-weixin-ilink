@@ -6,7 +6,7 @@
 dsh-weixin-ilink
 ```
 
-（npm 包；公开源码仓库：`https://github.com/<owner>/dsh-weixin-ilink`）
+（npm 包；公开源码仓库：`https://github.com/asd45183/dsh-weixin-ilink`）
 
 **简短说明 / Summary**
 

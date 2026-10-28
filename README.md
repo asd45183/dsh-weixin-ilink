@@ -210,6 +210,7 @@ proceeding.
 Prepared for the DSH plugin-market index format 1:
 
 - npm package: `dsh-weixin-ilink`
+- source: <https://github.com/asd45183/dsh-weixin-ilink>
 - `engines.dsh`: `>=0.2.1-alpha.4 <0.3.0`
 - community index: <https://polang233.github.io/dsh-plugin-index/index.json>
 - listing request: <https://github.com/polang233/dsh-plugin-index/issues/new?template=plugin-add.yml>
