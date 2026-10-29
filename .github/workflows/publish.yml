@@ -1,0 +1,58 @@
+# Publish dsh-weixin-ilink to npm.
+#
+# Trigger: GitHub Release published (create a release on a v* tag), or manual
+# workflow_dispatch. Registers as an npm trusted publisher: the /access form on
+# the npm package page wants exactly this filename ("publish.yml") plus the
+# repository and an optional environment name.
+name: Publish to npm
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write # OIDC: npm exchanges the workflow identity for a publish token.
+
+concurrency:
+  group: npm-publish
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Test and publish
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v7.0.0
+        with:
+          node-version: '22'
+          registry-url: https://registry.npmjs.org
+
+      # Trusted publishing needs npm >= 11.5.1; the Node 22 bundle is older.
+      - name: Upgrade npm
+        run: npm install -g npm@latest
+
+      - name: Install dependencies
+        run: npm install --no-fund --no-audit
+
+      - name: Self-check
+        run: node test/selfcheck.mjs
+
+      # On a release run, refuse to publish bytes whose version does not match
+      # the tag, so a forgotten `npm version` bump cannot shadow a release.
+      - name: Verify version matches tag
+        if: startsWith(github.ref, 'refs/tags/')
+        run: test "${GITHUB_REF_NAME#v}" = "$(node -p "require('./package.json').version")"
+
+      # No NPM_TOKEN secret: the id-token above is the credential. If trusted
+      # publishing is not (yet) registered for the package, add an automation
+      # token to the repo secrets and set it here instead:
+      #   env:
+      #     NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      - name: Publish
+        run: npm publish --access public --provenance

@@ -6,6 +6,8 @@ Weixin iLink channel plugin for DeepSeek Harness — text, media, persona modes,
 >
 > **Security change (0.7.0):** an empty `allowedSenders` now denies everyone. If you upgrade with an empty list, set `allowFirstContact: true` for one setup message or add your id to `allowedSenders`.
 >
+> **0.8.0:** model switching (`/model`, `/models`), multi-line sessions (`/new` `/list` `/use`), `/compact`, host command forwarding (`/plan` `/permission` `/goal` `/feedback` `/export`), approvals scoped to a session line, and `/trust 10m` timed approval bypass. Publishing moved to a GitHub Actions trusted publisher (`.github/workflows/publish.yml`).
+>
 > **Risk:** iLink is a reverse-engineered personal-WeChat protocol, not an official Tencent bot API. Bind a spare account; account restrictions are possible. No telemetry, no `readLinks`.
 
 ## Status — bidirectional loop with approvals and cancel
@@ -24,6 +26,11 @@ Weixin iLink channel plugin for DeepSeek Harness — text, media, persona modes,
 - [x] Inbound media: image/file/voice/video → CDN download + AES-128-ECB decrypt (SSRF allowlist), saved under `~/.dsh/weixin-own/media/` and handed to the agent as attachment paths (download+decrypt verified against a live inbound picture)
 - [x] Outbound media: `MEDIA:/path` tags in a reply → CDN upload + send (images default to FILE attachments; `imageAsFile: false` sends bubbles)
 - [x] `/help`, `/status`, `/clear`, `/proactive` (answered locally, never reach the agent)
+- [x] `/model` `/models` — list and switch the model for the next request (installed via the session controller)
+- [x] `/new` `/list` `/use` — multi-line session management
+- [x] `/compact` — compact older history now (same as the Web `/compact`)
+- [x] `/plan` `/permission` `/goal` `/feedback` `/export` — forwarded to the host's DSH commands
+- [x] `/trust 10m` — timed approval bypass on one session line (max 8h, in-memory)
 - [x] `/mode` persona modes (default assistant + 11 companion modes) with per-conversation overrides
 - [x] Life-state block (mood/energy/activity) and companion pacing (first-bubble delay + 2–3 bubbles)
 - [x] Persona/style/life/attachment hints are injected as hidden context; the visible user message stays clean
@@ -88,8 +95,8 @@ Images still default to a file attachment (`imageAsFile: true`); set
 
 **Persona/pacing/proactive are companion-only.** The stock `default` mode never
 gets a life block, a first-bubble delay, split bubbles, or proactive messages.
-`/clear` opens a fresh line; `/list` and `/use` (multi-line switching) are not
-ported yet. `proactiveEnabled` is off by default; `/proactive on` writes a
+`/clear` resets the current line; `/new` `/list` `/use` manage extra lines.
+`proactiveEnabled` is off by default; `/proactive on` writes a
 runtime override under `~/.dsh/weixin-own/proactive.json`.
 
 **The iLink session expires after a quiet period.** Every send then answers
@@ -105,6 +112,11 @@ src/
   state.js            — ~/.dsh/weixin-own/accounts/<id>.json (0600) + sync buf + context tokens + media dirs
   agent-bridge.js     — one DSH agent session per conversation; followup → whenIdle → reply
   session-reader.js   — read settled assistant reply out of snapshotEvents()
+  commands.js         — slash-command parsing + HELP_TEXT (no DSH imports, testable standalone)
+  admission.js        — deny-by-default allowlist + first-contact + group gates
+  model-catalog.js    — provider/model listing + `/model` argument resolution
+  trust.js            — `/trust` duration parsing + timed per-line approval grants
+  memo.js             — single-flight memoization (concurrent callers share one in-flight op)
   persona.js          — persona mode catalog + per-conversation overrides + prompt block
   life-state.js       — deterministic mood/activity/energy snapshot + prompt block
   human-pace.js       — companion first-bubble delay + reply splitting
@@ -129,6 +141,22 @@ cd dsh-weixin-ilink
 # link or publish; then in the profile:
 dsh plugin --profile web add dsh-weixin-ilink   # or add to profile package.json dsh.profile.bundles
 ```
+
+## Publishing
+
+`.github/workflows/publish.yml` publishes to npm as a GitHub Actions trusted
+publisher (OIDC, no stored `NPM_TOKEN`). It runs the self-check, verifies the
+release tag matches `package.json`'s version, then `npm publish --access public
+--provenance`.
+
+- Trigger: publish a GitHub Release on a `v*` tag, or run the workflow manually.
+- Register it on the npm package page once — the `/access` "trusted publisher"
+  form wants exactly: repository `asd45183/dsh-weixin-ilink`, workflow filename
+  `publish.yml`, environment (leave empty unless a GitHub Environment gate is
+  also configured).
+- Manual fallback (no trusted-publisher registration yet): add an automation
+  token to the repo secret `NPM_TOKEN` and set `NODE_AUTH_TOKEN` in the publish
+  step as noted in the workflow.
 
 ## Use
 
