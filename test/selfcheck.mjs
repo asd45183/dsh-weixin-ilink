@@ -11,13 +11,13 @@ import os from 'node:os'
 import path from 'node:path'
 import crypto from 'node:crypto'
 import { createServer } from 'node:http'
-import { saveAccount, loadAccount, listAccountIds, registerAccountId, clearAccount, saveContextToken, loadContextToken, recordConversationInbound, listConversations, activeLine, advanceLine, listLines, setActiveLine } from '../src/state.js'
+import { saveAccount, loadAccount, listAccountIds, registerAccountId, clearAccount, saveContextToken, loadContextToken, recordConversationInbound, listConversations, activeLine, advanceLine, listLines, setActiveLine, resolveWorkspace } from '../src/state.js'
 import { normalizeInbound, isSessionExpired, isStaleSessionRet } from '../src/transport/ilink.js'
 import { chunkText, extractMedia, guessMime, sendMediaFiles } from '../src/outbound.js'
 import { aes128EcbDecrypt, aes128EcbEncrypt, assertSafeMediaUrl, buildMediaItem, downloadMedia, mediaAllowlist, paddedSize, parseAesKey } from '../src/media.js'
 import { admission, groupAdmission } from '../src/admission.js'
 import { singleFlight } from '../src/memo.js'
-import { HELP_TEXT, isMentioned, parseCommand } from '../src/commands.js'
+import { HELP_TEXT, isMentioned, parseCommand, workspaceReply } from '../src/commands.js'
 import { readAssistantReply } from '../src/session-reader.js'
 import { readPersonaStore, resolveMode, setActiveMode, activeModeFor, buildPersonaBlock } from '../src/persona.js'
 import { inferLifeState, lifeBlock } from '../src/life-state.js'
@@ -25,7 +25,8 @@ import { planCompanionReply, isCompanionMode } from '../src/human-pace.js'
 import { planProactive } from '../src/proactive.js'
 import { formatModelList, listModelChoices, resolveModelChoice } from '../src/model-catalog.js'
 import { MAX_TRUST_MS, TrustStore, parseTrustDuration } from '../src/trust.js'
-import { AgentBridge } from '../src/agent-bridge.js'
+import { AgentBridge, sessionIdForLine } from '../src/agent-bridge.js'
+import { findSessionDirs, hasSessionFiles, removeSessionDirs } from '../src/session-files.js'
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-weixin-ilink-'))
 process.env.DSH_WEIXIN_OWN_STATE_DIR = tmp
@@ -50,6 +51,43 @@ assert.throws(() => saveAccount('../evil', { token: 'x', baseUrl: 'https://ilink
 assert.equal(loadAccount('../evil'), null)
 assert.equal(loadAccount('a/b'), null)
 assert.throws(() => registerAccountId('../evil'))
+
+// --- workspace: configurable agent cwd (and pipeline write boundary) -------
+// empty → the state-dir default, created on demand
+assert.equal(resolveWorkspace(''), path.join(tmp, 'sessions'))
+assert.ok(fs.statSync(path.join(tmp, 'sessions')).isDirectory())
+// absolute → used verbatim and created
+const wsAbs = path.join(tmp, 'ws-abs')
+assert.equal(resolveWorkspace(wsAbs), wsAbs)
+assert.ok(fs.statSync(wsAbs).isDirectory())
+// blank/whitespace is the default, not a directory named " "
+assert.equal(resolveWorkspace('   '), path.join(tmp, 'sessions'))
+// ~ expands to the home dir (fake HOME so the test never writes the real one)
+const fakeHome = path.join(tmp, 'home')
+fs.mkdirSync(fakeHome, { recursive: true })
+const realHome = process.env.HOME
+process.env.HOME = fakeHome
+try {
+  assert.equal(resolveWorkspace('~'), fakeHome)
+  assert.equal(resolveWorkspace('~/ws-home'), path.join(fakeHome, 'ws-home'))
+  assert.ok(fs.statSync(path.join(fakeHome, 'ws-home')).isDirectory())
+} finally {
+  process.env.HOME = realHome
+}
+// relative resolves against the process cwd, not the state dir
+const cwdBefore = process.cwd()
+process.chdir(tmp)
+try {
+  // compare against process.cwd() itself: macOS resolves /var → /private/var
+  assert.equal(resolveWorkspace('ws-rel'), path.join(process.cwd(), 'ws-rel'))
+  assert.ok(fs.statSync(path.join(process.cwd(), 'ws-rel')).isDirectory())
+} finally {
+  process.chdir(cwdBefore)
+}
+// a file at the path fails loudly; apply() falls back to the default dir
+const notADir = path.join(tmp, 'ws-file')
+fs.writeFileSync(notADir, 'x')
+assert.throws(() => resolveWorkspace(notADir))
 
 // --- normalizeInbound: echo/self skip, text extraction, group vs dm ---------
 const accountId = 'bot@im.wechat'
@@ -270,12 +308,33 @@ assert.deepEqual(parseCommand('/help'), { name: 'help', arg: '' })
 assert.deepEqual(parseCommand('  /CANCEL  '), { name: 'cancel', arg: '' })
 assert.deepEqual(parseCommand('/remind 10m 喝水'), { name: 'remind', arg: '10m 喝水' })
 assert.deepEqual(parseCommand('/models'), { name: 'models', arg: '' })
+assert.deepEqual(parseCommand('/workspace'), { name: 'workspace', arg: '' })
+assert.deepEqual(parseCommand('/workspace ~/x'), { name: 'workspace', arg: '~/x' })
 assert.equal(parseCommand('hello /help'), null)
 assert.equal(parseCommand(''), null)
 assert.equal(isMentioned('@bot 在吗'), true)
 assert.equal(isMentioned('  @小鲸 看看'), true)
 assert.equal(isMentioned('在吗 @bot'), false)
 assert.ok(HELP_TEXT.includes('/cancel') && HELP_TEXT.includes('/help'))
+assert.ok(HELP_TEXT.includes('/workspace'))
+
+// --- /workspace reply: echo only, never a switch ----------------------------
+{
+  // same path: one echo line and the how-to-switch hint, no duplicate
+  const same = workspaceReply('/ws/a', '/ws/a')
+  const sameLines = same.split('\n')
+  assert.equal(sameLines[0], '工作区：/ws/a')
+  assert.equal(sameLines.filter((line) => line.startsWith('配置值：')).length, 0)
+  assert.ok(sameLines.some((line) => line.startsWith('切换：')))
+  // stale line after a config change: both paths surface, plus the /new remedy
+  const stale = workspaceReply('/old/ws', '/new/ws')
+  assert.match(stale, /工作区：\/old\/ws/)
+  assert.match(stale, /配置值：\/new\/ws（发 \/new 后新会话线才用它）/)
+  // nothing in the reply offers to change anything
+  for (const text of [same, stale]) {
+    assert.doesNotMatch(text, /已切换|切换为|done|saved/i)
+  }
+}
 
 // --- group admission --------------------------------------------------------
 assert.equal(groupAdmission({ groupChatEnabled: false, allowedGroups: [], groupId: 'g1' }), 'deny')
@@ -370,6 +429,7 @@ assert.match(formatModelList(choices, { provider: 'p1', model: 'beta' }), /当�
   const fakeAgent = {
     session: {
       id: 'session-test',
+      header: { cwd: '/recorded/workspace' },
       requestHeader: () => ({ config: { provider: 'p1', model: 'alpha' } }),
     },
   }
@@ -397,8 +457,77 @@ assert.match(formatModelList(choices, { provider: 'p1', model: 'beta' }), /当�
   const forwarded = await bridge.forwardCommand('acct', 'conv', '/plan')
   assert.equal(forwarded.kind, 'success')
   assert.equal(calls.at(-1).line, '/plan')
+  // /workspace echoes the line's recorded cwd; the configured value is the
+  // fallback before a session exists (and the "configured" line in the reply).
+  assert.equal(bridge.configuredWorkspace(), '/tmp')
+  assert.equal(bridge.workspaceFor('acct', 'conv'), '/recorded/workspace')
+  assert.equal(bridge.workspaceFor('acct', 'no-session-yet'), '/tmp')
 }
 
+
+// --- session files: locate and delete exactly one session's directories -----
+{
+  const root = path.join(tmp, 'sessions-root')
+  const project = path.join(root, '--Users-mrd-proj--')
+  const doomed = path.join(project, 'weixin-a--3')
+  fs.mkdirSync(doomed, { recursive: true })
+  fs.writeFileSync(path.join(doomed, 'session.lock'), 'x')
+  assert.deepEqual(findSessionDirs('weixin-a--3', root), [doomed])
+  assert.equal(hasSessionFiles('weixin-a--3', root), true)
+  assert.equal(hasSessionFiles('weixin-a--4', root), false)
+  // a traversal-shaped id resolves to nothing, so it can never delete a project
+  assert.deepEqual(findSessionDirs('../proj', root), [])
+  assert.deepEqual(removeSessionDirs('..', root), [])
+  assert.deepEqual(removeSessionDirs('', root), [])
+  assert.deepEqual(removeSessionDirs('weixin-a--3', root), [doomed])
+  assert.equal(fs.existsSync(project), true, 'the project directory itself survives')
+  assert.equal(hasSessionFiles('weixin-a--3', root), false)
+  assert.deepEqual(removeSessionDirs('weixin-a--3', root), [], 'deleting twice is a no-op')
+}
+
+// --- session lines: auto-archive on leave, delete advances the active line --
+{
+  const calls = []
+  const lifecycle = {
+    archive: async (id) => calls.push(['archive', id]),
+    unarchive: async (id) => calls.push(['unarchive', id]),
+    forget: async (id) => calls.push(['forget', id]),
+    removeFiles: async (id) => { calls.push(['remove', id]); return ['/tmp/session'] },
+  }
+  const bridge = new AgentBridge({ ctx: { get: () => undefined }, cwd: '/tmp', sessionLifecycle: lifecycle })
+  const lineId = (line) => sessionIdForLine('acct-line', 'conv-line', line)
+
+  const cleared = await bridge.clear('acct-line', 'conv-line')
+  assert.equal(cleared.cleared, true)
+  assert.equal(cleared.line, 1, 'a new line is the next number')
+  assert.deepEqual(calls[0], ['archive', lineId(0)], 'the left line is archived')
+
+  calls.length = 0
+  const used = await bridge.useLine('acct-line', 'conv-line', 0)
+  assert.equal(used.used, true)
+  assert.deepEqual(calls, [['archive', lineId(1)], ['unarchive', lineId(0)]])
+  assert.equal(bridge.lines('acct-line', 'conv-line').active, 0)
+
+  calls.length = 0
+  const deleted = await bridge.deleteLine('acct-line', 'conv-line', 0)
+  assert.equal(deleted.deleted, true)
+  assert.equal(deleted.sessionId, lineId(0))
+  assert.equal(deleted.active, 1, 'deleting the active line advances it')
+  assert.deepEqual(calls, [['forget', lineId(0)], ['remove', lineId(0)]])
+  assert.deepEqual(deleted.removed, ['/tmp/session'])
+  assert.equal((await bridge.deleteLine('acct-line', 'conv-line', 9)).deleted, false, 'out-of-range line')
+
+  // autoArchive: false keeps archive state untouched
+  const quiet = []
+  const plain = new AgentBridge({
+    ctx: { get: () => undefined },
+    cwd: '/tmp',
+    autoArchive: false,
+    sessionLifecycle: { archive: async (id) => quiet.push(id) },
+  })
+  await plain.clear('acct-quiet', 'conv-quiet')
+  assert.deepEqual(quiet, [])
+}
 
 // --- timed approval trust --------------------------------------------------
 assert.equal(parseTrustDuration('10m').ok, true)

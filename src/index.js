@@ -23,7 +23,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import z from '@deepseek-ai/schemastery'
 import { admission, groupAdmission } from './admission.js'
-import { HELP_TEXT, isMentioned, parseCommand } from './commands.js'
+import { HELP_TEXT, isMentioned, parseCommand, workspaceReply } from './commands.js'
 import {
   ILINK_BASE_URL,
   CDN_BASE_URL,
@@ -47,15 +47,19 @@ import {
   loadContextToken,
   saveContextToken,
   ensureSessionsDir,
+  sessionsDir,
+  resolveWorkspace,
   ensureMediaDir,
   stateDir,
   activeLine,
+  listLines,
   recordConversationInbound,
   listConversations,
   loadProactivePreference,
   saveProactivePreference,
 } from './state.js'
-import { AgentBridge } from './agent-bridge.js'
+import { AgentBridge, sessionIdForLine } from './agent-bridge.js'
+import { hasSessionFiles, removeSessionDirs, sessionsRoot } from './session-files.js'
 import {
   DEFAULT_MODE_ID,
   activeModeFor,
@@ -98,7 +102,9 @@ export const Config = z.object({
   proactiveMaxPerDay: z.number().default(3).description('Maximum proactive messages per account per day.'),
   proactiveWindowStart: z.string().default('09:00').description('Proactive-message window start, HH:mm.'),
   proactiveWindowEnd: z.string().default('23:00').description('Proactive-message window end, HH:mm.'),
-  permissionPreset: z.string().default('workspace-write').description('Permission preset applied to each WeChat agent: "workspace-write" (default; wider writes need approval) or "danger-full-access" (no approval, full disk).'),
+  workspace: z.string().default('').description('Working directory for WeChat sessions: absolute, or "~/…", or relative to the DSH process cwd. Empty uses "~/.dsh/weixin-own/sessions". Under "workspace-write" this directory is the write boundary, so paths outside it still need approval.'),
+  autoArchive: z.boolean().default(true).description('Archive the session line that /new or /use leaves, and every inactive line at load, so the GUI project shows one WeChat session per conversation instead of accumulating one per line. Archived lines stay resumable with /use.'),
+  permissionPreset: z.string().default('workspace-write').description('Permission preset applied to each WeChat agent: "workspace-write" (default; writes limited to the workspace, wider writes need approval) or "danger-full-access" (no approval, full disk).'),
   turnTimeoutMs: z.number().default(600_000).description('Cancel a turn that runs longer than this (ms).'),
   approvalTimeoutMs: z.number().default(300_000).description('How long a WeChat approval prompt waits for a y/n reply before failing closed (ms).'),
   typingIndicator: z.boolean().default(true).description('Show "typing…" in WeChat while the agent works (best-effort).'),
@@ -145,11 +151,137 @@ export function apply(ctx, config) {
     return
   }
 
+  // The agent's cwd is also its `workspace-write` boundary, so a bad
+  // `workspace` must not take the whole channel down: log loudly and fall back
+  // to the default state directory instead of refusing every message.
+  let workspace
+  try {
+    workspace = resolveWorkspace(config.workspace)
+  } catch (error) {
+    errLog(`workspace "${config.workspace}" unusable (${String(error)}); falling back to ${sessionsDir()}`)
+    workspace = ensureSessionsDir()
+  }
+  log(`workspace: ${workspace} (permissionPreset=${config.permissionPreset})`)
+  // `ctx.logger` is not exported by every host, so the two facts an operator
+  // needs after a restart — which workspace is live, and whether the GUI knows
+  // it — go to stderr as well.
+  const note = (line) => {
+    try {
+      console.error(`[dsh-weixin-ilink] ${line}`)
+    } catch {
+      // A host that replaces console still gets the ctx.logger line.
+    }
+  }
+  note(`workspace=${workspace} preset=${config.permissionPreset}`)
+
+  // The GUI lists only workspaces registered with the host (`workspaceRegistry`)
+  // and only sessions attached to them, so a configured `workspace` is
+  // registered to make the WeChat project visible in the sidebar. The default
+  // state directory stays unregistered: an unconfigured channel should not
+  // appear as a project.
+  const configured = String(config.workspace ?? '').trim() !== ''
+  // `dshHomePath` is a function in this host; other compositions may expose nothing.
+  const hostHome = ctx.get('dshHomePath')
+  const sessionsRootPath = sessionsRoot(typeof hostHome === 'function' ? hostHome('sessions') : undefined)
+  let guiWorkspace
+
+  /** The host registry, or undefined in a composition without one; retried briefly for activation order. */
+  const registryReady = (async () => {
+    if (!configured) return undefined
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      const registry = ctx.get('workspaceRegistry')
+      if (registry?.create !== undefined) return registry
+      await sleep(250)
+    }
+    note('GUI: workspaceRegistry unavailable; the sidebar stays unaware of WeChat sessions')
+    return undefined
+  })()
+
+  const guiReady = (async () => {
+    const registry = await registryReady
+    if (registry === undefined) return undefined
+    try {
+      guiWorkspace = (await registry.resolveByPath?.(workspace)) ?? await registry.create(workspace)
+      note(`GUI: workspace "${guiWorkspace.title ?? workspace}" ${guiWorkspace.id === undefined ? '' : `id=${guiWorkspace.id} `}registered`)
+      // Sessions already on disk were created before the project existed; attach
+      // them now so the sidebar is correct without waiting for a new message.
+      // A session from another directory rejects and is skipped.
+      let attached = 0
+      for (const session of ctx.get('sessions')?.list?.() ?? []) {
+        try {
+          await guiWorkspace.attachSession(String(session.id))
+          attached += 1
+        } catch {
+          // not this workspace
+        }
+      }
+      if (attached > 0) note(`GUI: ${attached} existing session(s) attached`)
+      // Auto-archive every line a conversation is not on: the sidebar shows one
+      // WeChat session per chat and /use brings an archived line back.
+      if (config.autoArchive !== false) {
+        let archived = 0
+        for (const row of listConversations()) {
+          const active = activeLine(row.accountId, row.conversationId)
+          for (const line of listLines(row.accountId, row.conversationId)) {
+            if (line === active) continue
+            try {
+              await registry.archiveSession(sessionIdForLine(row.accountId, row.conversationId, line))
+              archived += 1
+            } catch {
+              // that line never produced a stored session
+            }
+          }
+        }
+        if (archived > 0) note(`GUI: ${archived} inactive line(s) archived`)
+      }
+      return guiWorkspace
+    } catch (error) {
+      note(`GUI: workspace registration for ${workspace} failed: ${String(error)}`)
+      return undefined
+    }
+  })()
+
+  /**
+   * Host-side session accounting used by the bridge: keep GUI archive state in
+   * step with the line being left, and delete a line's stored history on request.
+   */
+  const sessionLifecycle = {
+    async archive(sessionId) {
+      const registry = await registryReady
+      await registry?.archiveSession?.(sessionId)
+    },
+    async unarchive(sessionId) {
+      const registry = await registryReady
+      await registry?.unarchiveSession?.(sessionId)
+    },
+    async forget(sessionId) {
+      const registry = await registryReady
+      await registry?.unarchiveSession?.(sessionId)
+      await registry?.unpinSession?.(sessionId)
+      const entity = await guiReady
+      await entity?.detachSession?.(sessionId)
+    },
+    async removeFiles(sessionId) {
+      return removeSessionDirs(sessionId, sessionsRootPath)
+    },
+  }
+
+  /** Add one session to the GUI workspace; a session in an older workspace is simply left out. */
+  const attachSession = async (sessionId) => {
+    const entity = await guiReady
+    if (entity === undefined) return
+    await entity.attachSession(sessionId)
+    note(`GUI: session ${sessionId} attached to workspace ${entity.title ?? entity.path}`)
+  }
+
   const bridge = new AgentBridge({
     ctx,
-    cwd: ensureSessionsDir(),
+    cwd: workspace,
     permissionPreset: config.permissionPreset,
     turnTimeoutMs: config.turnTimeoutMs,
+    autoArchive: config.autoArchive,
+    sessionLifecycle,
+    attachSession,
     log,
     errLog,
   })
@@ -246,10 +378,21 @@ export function apply(ctx, config) {
         `模型：${currentModel === null ? '未知' : `${currentModel.provider}/${currentModel.model}`}`,
         `模式：${mode.name}（${mode.id}）`,
         `会话：${bridge.sessionId(accountId, conversationId)}`,
+        `工作区：${bridge.workspaceFor(accountId, conversationId)}`,
         `白名单：${config.allowedSenders.length} 个发送者`,
         life === null ? '' : `状态：${lifeSummary(life)}`,
         `主动消息：${proactiveEnabledNow() === true ? `开启，今天 ${sentToday}/${config.proactiveMaxPerDay}` : '关闭'}`,
       ].filter(Boolean).join('\n'))
+      return true
+    }
+    if (command.name === 'workspace') {
+      // Echo only: switching is a profile-config change, never a chat command,
+      // so a WeChat message can never choose its own sandbox write boundary.
+      await sendTo(
+        accountId,
+        conversationId,
+        workspaceReply(bridge.workspaceFor(accountId, conversationId), bridge.configuredWorkspace()),
+      )
       return true
     }
     if (command.name === 'new') {
@@ -261,10 +404,53 @@ export function apply(ctx, config) {
     }
     if (command.name === 'list') {
       const { active, lines } = bridge.lines(accountId, conversationId)
+      const registry = await registryReady
+      const archived = new Set(registry?.archivedSessionIds ?? [])
       await sendTo(accountId, conversationId, [
         `会话线（当前第 ${active + 1} 条）：`,
-        ...lines.map((line) => `${line === active ? '→' : '　'}${line + 1}`),
-        '用法：/use <编号> 切换；/new 开新线；/clear 清空当前线',
+        ...lines.map((line) => {
+          const sessionId = sessionIdForLine(accountId, conversationId, line)
+          const marks = [
+            hasSessionFiles(sessionId, sessionsRootPath) ? '有会话' : '空',
+            archived.has(sessionId) ? '已归档' : '',
+          ].filter(Boolean).join('，')
+          return `${line === active ? '→' : '　'}${line + 1}. ${marks}`
+        }),
+        '用法：/use <编号> 切换；/new 开新线；/delete <编号> 删除；/clear 清空当前线',
+      ].join('\n'))
+      return true
+    }
+    if (command.name === 'delete' || command.name === 'rm') {
+      const [rawNumber, confirmation] = command.arg.trim().split(/\s+/)
+      if (!/^\d+$/.test(rawNumber ?? '')) {
+        await sendTo(accountId, conversationId, '用法：/delete <编号>，先发 /list 查看；确认时再发 /delete <编号> confirm')
+        return true
+      }
+      const line = Number(rawNumber) - 1
+      const { active } = bridge.lines(accountId, conversationId)
+      if (line < 0 || line > active) {
+        await sendTo(accountId, conversationId, `没有第 ${rawNumber} 条会话线；先发 /list 查看`)
+        return true
+      }
+      const sessionId = sessionIdForLine(accountId, conversationId, line)
+      if (confirmation !== 'confirm') {
+        await sendTo(accountId, conversationId, [
+          `将删除第 ${rawNumber} 条会话线：${sessionId}`,
+          '该线的历史会从磁盘删除，无法恢复（GUI 里的归档不会删除文件）。',
+          `确认请发 /delete ${rawNumber} confirm`,
+        ].join('\n'))
+        return true
+      }
+      const result = await bridge.deleteLine(accountId, conversationId, line)
+      if (result.deleted !== true) {
+        await sendTo(accountId, conversationId, result.busy === true
+          ? '当前有任务在跑，先 /cancel 再删除'
+          : `没有第 ${rawNumber} 条会话线；先发 /list 查看`)
+        return true
+      }
+      await sendTo(accountId, conversationId, [
+        `已删除第 ${rawNumber} 条会话线（${result.removed.length} 个会话目录）`,
+        line === active ? `当前线改为第 ${result.active + 1} 条（空，下一条消息新建）` : `当前线仍是第 ${active + 1} 条`,
       ].join('\n'))
       return true
     }

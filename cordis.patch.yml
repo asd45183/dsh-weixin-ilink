@@ -13,6 +13,11 @@
         mediaEnabled: true   # inbound CDN download/decrypt + outbound MEDIA: uploads
         cdnBaseUrl: ""       # empty = upstream default; set to override the media CDN root
         mediaTimeoutMs: 120000
+        # Working directory for WeChat sessions. Empty = ~/.dsh/weixin-own/sessions.
+        # Absolute paths win; "~/x" expands to your home dir, anything else
+        # relative resolves against the DSH process cwd. Under workspace-write
+        # this is also the write boundary (outside writes still ask for approval).
+        workspace: ""
         # "danger-full-access" lets a WeChat message write the whole disk with
         # no approval prompt — only use it on a trusted account/chat.
         permissionPreset: workspace-write

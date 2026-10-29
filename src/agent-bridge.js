@@ -70,15 +70,29 @@ export function legacySessionIdFor(conversationId) {
 export class AgentBridge {
   /**
    * @param {{ ctx: any, cwd: string, permissionPreset?: string, turnTimeoutMs?: number,
-   *           log?: (s: string) => void, errLog?: (s: string) => void }} opts
+   *           log?: (s: string) => void, errLog?: (s: string) => void,
+   *           attachSession?: (sessionId: string) => Promise<void> | void,
+   *           autoArchive?: boolean,
+   *           sessionLifecycle?: {
+   *             archive?: (sessionId: string) => Promise<void>,
+   *             unarchive?: (sessionId: string) => Promise<void>,
+   *             forget?: (sessionId: string) => Promise<void>,
+   *             removeFiles?: (sessionId: string) => Promise<string[]> | string[],
+   *           } }} opts
    */
-  constructor({ ctx, cwd, permissionPreset = 'workspace-write', turnTimeoutMs = 600_000, log, errLog }) {
+  constructor({ ctx, cwd, permissionPreset = 'workspace-write', turnTimeoutMs = 600_000, log, errLog, attachSession, autoArchive = true, sessionLifecycle = null }) {
     this.ctx = ctx
     this.cwd = cwd
     this.permissionPreset = permissionPreset
     this.turnTimeoutMs = turnTimeoutMs
     this.log = log ?? (() => {})
     this.errLog = errLog ?? (() => {})
+    /** Host hook that adds a freshly opened session to the GUI workspace, when the host has one. */
+    this.attachSession = attachSession ?? null
+    /** Archive a superseded line so one conversation keeps a single visible session. */
+    this.autoArchive = autoArchive !== false
+    /** Host hooks for GUI archive state and physical deletion; absent hooks are no-ops. */
+    this.sessionLifecycle = sessionLifecycle
     /** `${accountId}\0${conversationId}` -> { handle, agent, busy, active, cancelledByUser } */
     this.sessions = new Map()
     /** sessionId -> { accountId, conversationId } (for approval forwarding). */
@@ -94,6 +108,22 @@ export class AgentBridge {
 
   static keyOf(accountId, conversationId, line = 0) {
     return `${accountId ?? ''}\0${conversationId ?? ''}\0${line}`
+  }
+
+  /**
+   * Run one optional host hook. A host without the hook, or a hook that fails
+   * for a session the host does not know, must not fail the chat command that
+   * triggered it: the in-memory line state is already consistent.
+   */
+  async #lifecycle(name, sessionId) {
+    const hook = this.sessionLifecycle?.[name]
+    if (typeof hook !== 'function') return undefined
+    try {
+      return await hook(String(sessionId))
+    } catch (error) {
+      this.log(`session ${name} skipped for ${sessionId}: ${String(error)}`)
+      return undefined
+    }
   }
 
   /**
@@ -119,6 +149,24 @@ export class AgentBridge {
   /** The session id the next message will use (for /status). */
   sessionId(accountId, conversationId) {
     return sessionIdForLine(accountId, conversationId, activeLine(accountId, conversationId))
+  }
+
+  /** The workspace every new session line is created in (resolved from config). */
+  configuredWorkspace() {
+    return this.cwd
+  }
+
+  /**
+   * Working directory the current line actually runs in, for the read-only
+   * `/workspace` echo. A session records its cwd at creation, so a line opened
+   * before `workspace` changed still reports the old directory — that is the
+   * honest answer, and the reason switching needs a new line.
+   */
+  workspaceFor(accountId, conversationId) {
+    const line = activeLine(accountId, conversationId)
+    const record = this.sessions.get(AgentBridge.keyOf(accountId, conversationId, line))
+    const recorded = record?.agent?.session?.header?.cwd
+    return typeof recorded === 'string' && recorded !== '' ? recorded : this.cwd
   }
 
   /** The model this conversation will use, or null before its agent exists. */
@@ -204,8 +252,44 @@ export class AgentBridge {
         this.errLog(`session dispose failed: ${String(error)}`)
       }
     }
+    if (this.autoArchive) await this.#lifecycle('archive', sessionIdForLine(accountId, conversationId, active))
+    await this.#lifecycle('unarchive', sessionIdForLine(accountId, conversationId, target))
     setActiveLine(accountId, conversationId, target)
     return { used: true, line: target }
+  }
+
+  /**
+   * Delete one line's session for good: drop its GUI accounting, dispose a live
+   * agent, and remove the stored history. Deleting the active line first
+   * advances the persisted line number, so the next message cannot resume the
+   * transcript that was just removed.
+   * @returns {{deleted:true,line:number,sessionId:string,active:number,removed:string[]}
+   *   | {deleted:false,invalid?:true,busy?:true,active:number}}
+   */
+  async deleteLine(accountId, conversationId, line) {
+    const target = Number(line)
+    const active = activeLine(accountId, conversationId)
+    if (!Number.isSafeInteger(target) || target < 0 || target > active) {
+      return { deleted: false, invalid: true, active }
+    }
+    const key = AgentBridge.keyOf(accountId, conversationId, target)
+    const record = this.sessions.get(key)
+    if (record?.active === true) return { deleted: false, busy: true, active }
+    const sessionId = sessionIdForLine(accountId, conversationId, target)
+    if (record) {
+      this.sessions.delete(key)
+      this.bySession.delete(String(record.agent.session.id))
+      try {
+        await record.handle.dispose()
+      } catch (error) {
+        this.errLog(`session dispose failed: ${String(error)}`)
+      }
+    }
+    const nextActive = target === active ? advanceLine(accountId, conversationId) : active
+    await this.#lifecycle('forget', sessionId)
+    const removed = (await this.#lifecycle('removeFiles', sessionId)) ?? []
+    this.log(`deleted line=${target} session=${sessionId} dirs=${Array.isArray(removed) ? removed.length : 0}`)
+    return { deleted: true, line: target, sessionId, active: nextActive, removed: Array.isArray(removed) ? removed : [] }
   }
 
   /**
@@ -228,6 +312,9 @@ export class AgentBridge {
         this.errLog(`session dispose failed: ${String(error)}`)
       }
     }
+    // The line being left leaves the GUI project, so the sidebar keeps one
+    // visible session per conversation instead of growing with every /new.
+    if (this.autoArchive) await this.#lifecycle('archive', sessionIdForLine(accountId, conversationId, line))
     const nextLine = advanceLine(accountId, conversationId)
     return { cleared: true, line: nextLine, sessionId: sessionIdForLine(accountId, conversationId, nextLine) }
   }
@@ -295,14 +382,27 @@ export class AgentBridge {
     this.sessions.set(key, record)
     this.bySession.set(String(handle.agent.session.id), { accountId, conversationId, line })
     // Apply the configured permission preset (sandbox + approval policy) so a
-    // WeChat session can write where it needs to; `workspace-write` keeps the
-    // default and still requires approval for wider writes.
+    // WeChat session can write where it needs to; `workspace-write` treats the
+    // session cwd (this.cwd) as its boundary and still requires approval for
+    // wider writes.
     try {
       this.ctx.get('permissionPresets')?.set(handle.agent.session, this.permissionPreset)
     } catch (error) {
       this.errLog(`permission preset "${this.permissionPreset}" failed: ${String(error)}`)
     }
-    this.log(`agent ${resumed ? 'resumed' : 'created'} for account=${safeId(accountId)} conv=${safeId(conversationId)} line=${line} session=${handle.agent.session.id} preset=${this.permissionPreset}`)
+    this.log(`agent ${resumed ? 'resumed' : 'created'} for account=${safeId(accountId)} conv=${safeId(conversationId)} line=${line} session=${handle.agent.session.id} preset=${this.permissionPreset} cwd=${this.cwd}`)
+    // Membership in the host's GUI workspace, so a session opened here shows up
+    // beside sessions started from the Web app. A line still running in a
+    // previous workspace cannot attach; that is a no-op, not a failure.
+    if (this.attachSession !== null) {
+      try {
+        await this.attachSession(String(handle.agent.session.id))
+      } catch (error) {
+        this.log(`session ${handle.agent.session.id} left out of the GUI workspace: ${String(error)}`)
+      }
+    }
+    // Resuming a line that auto-archive hid brings it back into the sidebar.
+    await this.#lifecycle('unarchive', String(handle.agent.session.id))
     return record
   }
 

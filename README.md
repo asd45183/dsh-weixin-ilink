@@ -8,6 +8,8 @@ Weixin iLink channel plugin for DeepSeek Harness — text, media, persona modes,
 >
 > **0.8.0:** model switching (`/model`, `/models`), multi-line sessions (`/new` `/list` `/use`), `/compact`, host command forwarding (`/plan` `/permission` `/goal` `/feedback` `/export`), approvals scoped to a session line, and `/trust 10m` timed approval bypass. Publishing moved to a GitHub Actions trusted publisher (`.github/workflows/publish.yml`).
 >
+> **0.9.0:** `workspace` config key — point WeChat sessions at any directory instead of `~/.dsh/weixin-own/sessions`; a read-only `/workspace` command; the configured workspace is registered in the Web sidebar; and session lines are auto-archived when left, with `/delete <n> confirm` for real removal. See [How to switch the workspace](#how-to-switch-the-workspace) and [Session lines](#session-lines).
+>
 > **Risk:** iLink is a reverse-engineered personal-WeChat protocol, not an official Tencent bot API. Bind a spare account; account restrictions are possible. No telemetry, no `readLinks`.
 
 ## Status — bidirectional loop with approvals and cancel
@@ -20,14 +22,15 @@ Weixin iLink channel plugin for DeepSeek Harness — text, media, persona modes,
 - [x] Full toolset (mounts the deployment's default agent preset)
 - [x] Outbound reply (chunk + context_token echo)
 - [x] Dedup (iLink re-sends identical text under new ids)
+- [x] `workspace` config (agent cwd + `workspace-write` boundary; default `~/.dsh/weixin-own/sessions`)
 - [x] `permissionPreset` config (`workspace-write` default, `danger-full-access` opt-in)
 - [x] `/cancel` + per-turn timeout (`turnTimeoutMs`)
 - [x] Approval forwarding: a tool that needs approval asks the chat, `y`/`n` answers it
 - [x] Inbound media: image/file/voice/video → CDN download + AES-128-ECB decrypt (SSRF allowlist), saved under `~/.dsh/weixin-own/media/` and handed to the agent as attachment paths (download+decrypt verified against a live inbound picture)
 - [x] Outbound media: `MEDIA:/path` tags in a reply → CDN upload + send (images default to FILE attachments; `imageAsFile: false` sends bubbles)
-- [x] `/help`, `/status`, `/clear`, `/proactive` (answered locally, never reach the agent)
+- [x] `/help`, `/status`, `/workspace`, `/clear`, `/proactive` (answered locally, never reach the agent)
 - [x] `/model` `/models` — list and switch the model for the next request (installed via the session controller)
-- [x] `/new` `/list` `/use` — multi-line session management
+- [x] `/new` `/list` `/use` — multi-line session management, plus auto-archive on leave and `/delete <n> confirm`
 - [x] `/compact` — compact older history now (same as the Web `/compact`)
 - [x] `/plan` `/permission` `/goal` `/feedback` `/export` — forwarded to the host's DSH commands
 - [x] `/trust 10m` — timed approval bypass on one session line (max 8h, in-memory)
@@ -110,9 +113,10 @@ receiving a fresh message from the user restores the session.
 src/
   index.js            — DSH plugin entry: Config + apply + poll loop + dedup + media wiring
   state.js            — ~/.dsh/weixin-own/accounts/<id>.json (0600) + sync buf + context tokens + media dirs
-  agent-bridge.js     — one DSH agent session per conversation; followup → whenIdle → reply
+  agent-bridge.js     — one DSH agent session per conversation; lines, archive hooks, followup → whenIdle → reply
   session-reader.js   — read settled assistant reply out of snapshotEvents()
-  commands.js         — slash-command parsing + HELP_TEXT (no DSH imports, testable standalone)
+  session-files.js    — locate and delete one session's directories (path-safe, no DSH imports)
+  commands.js         — slash-command parsing + HELP_TEXT + `/workspace` reply text (no DSH imports, testable standalone)
   admission.js        — deny-by-default allowlist + first-contact + group gates
   model-catalog.js    — provider/model listing + `/model` argument resolution
   trust.js            — `/trust` duration parsing + timed per-line approval grants
@@ -129,7 +133,7 @@ src/
 bin/
   login.js            — terminal QR login
 test/
-  selfcheck.mjs       — assert self-check (state, normalizeInbound, chunkText, media crypto/SSRF/CDN, session-reader)
+  selfcheck.mjs       — assert self-check (state, workspace resolution, session files/lines, normalizeInbound, chunkText, media crypto/SSRF/CDN, session-reader)
 cordis.patch.yml      — profile insert row
 ```
 
@@ -177,8 +181,84 @@ node bin/login.js
 ```
 
 The plugin injects `agents` + `agentDefaultModel`, so it uses the profile's
-default model route. The agent's `cwd` is `~/.dsh/weixin-own/sessions/`, so every
-WeChat conversation groups together in the GUI, separate from the deployment cwd.
+default model route. Every WeChat conversation runs in the configured
+`workspace` (default `~/.dsh/weixin-own/sessions/`), so all WeChat chats group
+together in the GUI, separate from the deployment cwd.
+
+### Workspace
+
+`workspace` is the agent's `cwd`, and under the default `workspace-write` preset
+it is also the sandbox's write boundary: writes inside need no approval, writes
+outside prompt in the chat for `y`/`n`.
+
+```yaml
+- id: dsh-weixin-own
+  name: "dsh-weixin-ilink"
+  config:
+    workspace: "~/weixin-scratch"   # or /abs/path; "~/x" and relative paths supported
+```
+
+- Empty (default) keeps `~/.dsh/weixin-own/sessions/`.
+- The directory is created on demand; an unusable path logs an error and falls
+  back to the default instead of disabling the channel.
+- All accounts and conversations share one workspace, so two chats can see each
+  other's files. Point it at a scratch directory rather than a repo you care
+  about if more than one person can message the bound account.
+
+#### Where it shows up in the Web GUI
+
+A configured `workspace` is registered with the host's `workspaceRegistry` at
+plugin load and attached to every session the bridge opens, so the sidebar shows
+it as a project with the WeChat sessions listed under it. Details:
+
+- Only an explicit `workspace` is registered. With the default
+  `~/.dsh/weixin-own/sessions` the channel stays out of the sidebar.
+- Registration happens on load; a workspace you delete in the GUI comes back on
+  the next DSH start (the registry entry is created again, idempotently).
+- A session only appears after the first real message opens it. `/workspace`
+  and `/new` answer without opening a session, so send a message after `/new`.
+- A line still running in the previous workspace cannot be attached (its recorded
+  cwd differs); it keeps working there and shows up under no project. `/new`
+  fixes it.
+- Profiles without a workspace registry (headless) skip this silently.
+
+#### How to switch the workspace
+
+There is **no chat command that sets the workspace** — the chat can only read it
+(`/workspace`, `/status`). A WeChat message must never choose its own sandbox
+write boundary, so switching is a profile-config change made on the host:
+
+1. Edit the active profile's patch, `$DSH_HOME/profiles/<profile>/cordis.patch.yml`
+   (usually `~/.dsh/profiles/web/cordis.patch.yml`), and set the value on the
+   existing row — keep the other keys as they are:
+
+   ```yaml
+   - id: dsh-weixin-own
+     name: "dsh-weixin-ilink"
+     config:
+       allowedSenders: ["wxid_xxx"]     # unchanged
+       workspace: "~/projects/scratch"  # the new workspace
+   ```
+
+2. Save. With `dsh-hmr` enabled (the `web` template ships it on) the profile is
+   recomposed immediately; otherwise restart DSH. Config-only changes do not
+   need a code restart.
+3. In WeChat send `/new` (or `/clear`) — **required**: a session records its cwd
+   at creation, so an existing line keeps resuming in the old directory.
+4. Send `/workspace` (or `/status`) to confirm the new path.
+
+To apply one workspace to every profile instead, put the same row config in the
+home patch `$DSH_HOME/cordis.patch.yml`; it outranks each profile patch.
+
+#### Reading the workspace from the chat
+
+| Send | Answer |
+|---|---|
+| `/workspace` | current line's directory, plus the configured value when the two differ (i.e. after a config change, before `/new`) |
+| `/status` | one `工作区：…` line among the other status lines |
+
+Both are read-only. Nothing in a chat message can change the workspace, the
+permission preset, or the write boundary.
 
 ### Chat commands
 
@@ -188,12 +268,14 @@ WeChat conversation groups together in the GUI, separate from the deployment cwd
 | `/model` | list models; `/model 2` or `/model provider/model` switches for the next request |
 | `/models` | list only; `/model list` is an alias |
 | `/mode` | list persona modes; `/mode 女友` switches (and opens a new line) |
-| `/status` | account, mode, session id, allowlist count, life state, proactive status |
+| `/status` | account, mode, session id, workspace, allowlist count, life state, proactive status |
+| `/workspace` | show this line's workspace (read-only; switching is a profile-config change, see [How to switch the workspace](#how-to-switch-the-workspace)) |
 | `/trust [10m\|off]` | temporarily skip approval prompts on this session line (max 8h, in-memory) |
 | `/plan` `/permission` `/goal` `/feedback` `/export` | forwarded to the host's own DSH commands |
-| `/new` | open a fresh session line |
-| `/list` | list session lines |
-| `/use <n>` | switch to an existing line |
+| `/new` | open a fresh session line (archives the line it leaves) |
+| `/list` | list session lines with `有会话`/`空` and whether each is archived |
+| `/use <n>` | switch to an existing line (unarchives it) |
+| `/delete <n> [confirm]` | delete one line's stored history — no confirmation without `confirm` |
 | `/compact` | compact older history now (same as the Web `/compact`) |
 | `/clear` | clear the current context and open a fresh line |
 | `/proactive on\|off` | toggle proactive messages for this account |
@@ -205,6 +287,8 @@ WeChat conversation groups together in the GUI, separate from the deployment cwd
 |---|---|---|
 | `allowedSenders` | `[]` | Weixin ids allowed to drive the agent; empty denies unless `allowFirstContact` is true |
 | `allowFirstContact` | `false` | first-run setup only: allow the first sender once so you can copy its id into `allowedSenders` |
+| `workspace` | `""` | agent `cwd` for WeChat sessions (`~` and relative paths supported); empty = `~/.dsh/weixin-own/sessions`. Also the `workspace-write` boundary |
+| `autoArchive` | `true` | archive the line `/new` or `/use` leaves, and every inactive line at load, so one chat keeps one visible session |
 | `permissionPreset` | `workspace-write` | `danger-full-access` lets a WeChat message write the whole disk with no approval — trusted account only |
 | `turnTimeoutMs` | `600000` | cancel a turn running longer than this |
 | `approvalTimeoutMs` | `300000` | approval prompt waits this long, then fails closed (`unavailable`) |
@@ -223,6 +307,37 @@ WeChat conversation groups together in the GUI, separate from the deployment cwd
 | `proactiveMinGapMinutes` | `180` | minimum gap since the user's last message |
 | `proactiveMaxPerDay` | `3` | daily proactive cap per account |
 | `proactiveWindowStart` / `End` | `09:00` / `23:00` | proactive window (local `HH:mm`) |
+
+### Session lines
+
+Every chat can hold several session lines; a line is an independent Session, so
+each keeps its own context and history. `/new` (and `/clear`, which is the same
+operation) never deletes anything — it disposes the in-memory agent and advances
+`~/.dsh/weixin-own/session-lines.json`, so the next message opens session
+`weixin-<conv>-<hash>--<n>`.
+
+Lifecycle of a line that is left behind:
+
+- **Archived automatically** (`autoArchive`, default on) — `/new` and `/use`
+  archive the line they leave, and a load archives every inactive line, so the
+  GUI project shows one WeChat session per chat. Archived sessions stay on disk,
+  stay listed by `/list` as `已归档`, and `/use <n>` unarchives the one you
+  switch back to. Turn the behavior off with `autoArchive: false`.
+- **Deleted only on request** — `/delete <n> confirm` removes that line's stored
+  session directories, its archive/pin entries and its workspace membership.
+  Two steps, because it is not recoverable: `/delete <n>` first shows the
+  session id and what would be lost.
+
+Details worth knowing:
+
+- Line numbers only grow; deleting a line leaves a `空` number behind, and
+  `/list` marks it. Reuse is not implemented.
+- Deleting the active line advances to a fresh empty line, so the deleted
+  transcript cannot be resumed by the next message.
+- Session directories are found by scanning `$DSH_HOME/sessions/*/<session id>`;
+  the id is validated before any removal, so a line can never name a path.
+- A session cannot be deleted while its turn runs (`/cancel` first). GUI archive
+  hides a session but never deletes files.
 
 ### Multiple accounts
 

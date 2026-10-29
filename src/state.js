@@ -131,6 +131,26 @@ export function ensureSessionsDir() {
 }
 
 /**
+ * Working directory for Weixin conversations: the `workspace` config key when
+ * set, else {@link sessionsDir}.
+ *
+ * `~` and `~/…` expand to the user's home; anything else relative resolves
+ * against the DSH process cwd, so `workspace: ./scratch` stays predictable.
+ * The directory is created on demand (the agent's `workspace-write` boundary is
+ * this path, so it has to exist before a session can be created).
+ * @param {string} [configured] raw `workspace` value; empty means the default.
+ * @returns {string} absolute path.
+ */
+export function resolveWorkspace(configured) {
+  const raw = String(configured ?? '').trim()
+  if (raw === '') return ensureSessionsDir()
+  const expanded = raw === '~' ? os.homedir() : raw.startsWith('~/') ? path.join(os.homedir(), raw.slice(2)) : raw
+  const dir = path.resolve(expanded)
+  fs.mkdirSync(dir, { recursive: true })
+  return dir
+}
+
+/**
  * Per-message directory for decrypted inbound media, under
  * `~/.dsh/weixin-own/media/`. Segments are sanitized so a peer id can never
  * escape the media root.

@@ -13,11 +13,13 @@ export const HELP_TEXT = [
   '/model —— 查看/切换模型；/model 2 或 /model provider/model',
   '/models —— 只列出可用模型（等同 /model 无参数）',
   '/mode —— 查看人格模式；/mode 女友 切换模式',
-  '/status —— 账号、模式、会话、白名单、主动消息状态',
+  '/status —— 账号、模式、会话、工作区、白名单、主动消息状态',
+  '/workspace —— 查看当前会话的工作区（只读；切换靠 profile 配置）',
   '/trust 10m —— 当前会话线限时免批；/trust off 关闭',
   '/plan /permission /goal /feedback /export —— 转发给 DSH 原生命令',
   '/new —— 开一条新会话线',
-  '/list —— 列出会话线',
+  '/list —— 列出会话线（有会话/空、是否已归档）',
+  '/delete <编号> —— 删除某条会话线的历史；确认时加 confirm',
   '/use <编号> —— 切到某条会话线',
   '/compact —— 立即压缩当前会话的较早历史',
   '/clear —— 清空当前会话，下一条消息开新会话',
@@ -30,6 +32,24 @@ export const HELP_TEXT = [
   '· agent 回复里带 MEDIA:/绝对路径 时会自动发送图片或文件',
   '· 伴侣模式下会延迟首条、拆成 2–3 条气泡；默认助手不分条不延迟',
 ].join('\n')
+
+/**
+ * Reply body for the read-only `/workspace` command.
+ *
+ * Echo only — switching is deliberately not offered from the chat, because the
+ * workspace is the sandbox's write boundary and a WeChat message must not choose
+ * it. When the current line predates a config change its recorded cwd differs
+ * from the configured one, so both are shown with the `/new` remedy.
+ * @param {string} current working directory the current line actually runs in
+ * @param {string} configured workspace new session lines will use
+ * @returns {string} message text
+ */
+export function workspaceReply(current, configured) {
+  const lines = [`工作区：${current}`]
+  if (current !== configured) lines.push(`配置值：${configured}（发 /new 后新会话线才用它）`)
+  lines.push('切换：改 profile 的 cordis.patch.yml 里的 workspace，保存后发 /new')
+  return lines.join('\n')
+}
 
 /**
  * Split one message into a command name and its argument.
