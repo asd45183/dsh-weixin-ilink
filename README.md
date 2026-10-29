@@ -148,9 +148,10 @@ dsh plugin --profile web add dsh-weixin-ilink   # or add to profile package.json
 
 ## Publishing
 
-`.github/workflows/publish.yml` publishes to npm as a GitHub Actions trusted
-publisher (OIDC, no stored `NPM_TOKEN`). It runs the self-check, verifies the
-release tag matches `package.json`'s version, then `npm publish --access public
+`.github/workflows/publish.yml` publishes to npm from GitHub Actions: OIDC
+trusted publishing when the npm package page lists this repository and workflow,
+an `NPM_TOKEN` secret otherwise. It runs the self-check, verifies the release tag
+matches `package.json`'s version, then `npm publish --access public
 --provenance`.
 
 - Trigger: publish a GitHub Release on a `v*` tag, or run the workflow manually.
