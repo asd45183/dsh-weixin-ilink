@@ -159,8 +159,16 @@ release tag matches `package.json`'s version, then `npm publish --access public
   `publish.yml`, environment (leave empty unless a GitHub Environment gate is
   also configured).
 - Manual fallback (no trusted-publisher registration yet): add an automation
-  token to the repo secret `NPM_TOKEN` and set `NODE_AUTH_TOKEN` in the publish
-  step as noted in the workflow.
+  token to the repo secret `NPM_TOKEN`; the workflow then uses it instead of OIDC.
+- Local fallback, which is how 0.9.0 shipped: `npm login` once against the
+  official registry, then
+  `npm publish --access public --registry https://registry.npmjs.org` from this
+  directory. A local publish carries **no** provenance attestation, and the
+  registry answers `202 Accepted` — the version becomes installable about a
+  minute later, so verify with `npm view dsh-weixin-ilink version`.
+- Publishing requires the official registry: this machine's `npm` defaults to
+  `registry.npmmirror.com`, where `npm whoami` fails and a publish lands on the
+  mirror contract instead of npm.
 
 ## Use
 
