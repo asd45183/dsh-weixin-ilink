@@ -23,6 +23,9 @@ jobs:
   publish:
     name: Test and publish
     runs-on: ubuntu-24.04
+    # Secrets are not readable from `if:`, so the fallback choice is decided here.
+    env:
+      HAS_NPM_TOKEN: ${{ secrets.NPM_TOKEN != '' }}
     steps:
       - uses: actions/checkout@v7.0.1
         with:
@@ -49,10 +52,18 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/')
         run: test "${GITHUB_REF_NAME#v}" = "$(node -p "require('./package.json').version")"
 
-      # Credential: OIDC trusted publishing (id-token: write above). The npm
-      # package page must list this repository and this workflow filename once;
-      # no stored token is involved, so a missing or expired NPM_TOKEN cannot
-      # break a release. A registry without trusted publishing needs the token
-      # branch restored instead.
-      - name: Publish
+      # Credential, in order of preference:
+      # 1. OIDC trusted publishing (id-token: write above): the npm package page
+      #    lists this repository and this workflow filename once, and no stored
+      #    token exists anywhere.
+      # 2. An `NPM_TOKEN` repository secret holding an npm automation token, for
+      #    a package whose page has no trusted publisher yet.
+      - name: Publish with trusted publishing
+        if: env.HAS_NPM_TOKEN != 'true'
         run: npm publish --access public --provenance
+
+      - name: Publish with NPM_TOKEN
+        if: env.HAS_NPM_TOKEN == 'true'
+        run: npm publish --access public --provenance
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
