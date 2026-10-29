@@ -49,10 +49,10 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/')
         run: test "${GITHUB_REF_NAME#v}" = "$(node -p "require('./package.json').version")"
 
-      # Credential: NPM_TOKEN repo secret (an npm *automation* token, which
-      # bypasses the 2FA OTP requirement). Swap to OIDC trusted publishing later
-      # by registering the workflow on the npm package page and dropping this env.
+      # Credential: OIDC trusted publishing (id-token: write above). The npm
+      # package page must list this repository and this workflow filename once;
+      # no stored token is involved, so a missing or expired NPM_TOKEN cannot
+      # break a release. A registry without trusted publishing needs the token
+      # branch restored instead.
       - name: Publish
         run: npm publish --access public --provenance
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
