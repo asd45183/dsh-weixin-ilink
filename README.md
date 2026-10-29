@@ -6,7 +6,7 @@ Weixin iLink channel plugin for DeepSeek Harness — text, media, persona modes,
 >
 > **Security change (0.7.0):** an empty `allowedSenders` now denies everyone. If you upgrade with an empty list, set `allowFirstContact: true` for one setup message or add your id to `allowedSenders`.
 >
-> **0.8.0:** model switching (`/model`, `/models`), multi-line sessions (`/new` `/list` `/use`), `/compact`, host command forwarding (`/plan` `/permission` `/goal` `/feedback` `/export`), approvals scoped to a session line, and `/trust 10m` timed approval bypass. Publishing moved to a GitHub Actions trusted publisher (`.github/workflows/publish.yml`).
+> **0.8.0:** model switching (`/model`, `/models`), multi-line sessions (`/new` `/list` `/use`), `/compact`, host command forwarding (`/plan` `/permission` `/goal` `/feedback` `/export`), approvals scoped to a session line, and `/trust 10m` timed approval bypass.
 >
 > **0.9.0:** `workspace` config key — point WeChat sessions at any directory instead of `~/.dsh/weixin-own/sessions`; a read-only `/workspace` command; the configured workspace is registered in the Web sidebar; and session lines are auto-archived when left, with `/delete <n> confirm` for real removal. See [How to switch the workspace](#how-to-switch-the-workspace) and [Session lines](#session-lines).
 >
@@ -148,28 +148,25 @@ dsh plugin --profile web add dsh-weixin-ilink   # or add to profile package.json
 
 ## Publishing
 
-`.github/workflows/publish.yml` publishes to npm from GitHub Actions: OIDC
-trusted publishing when the npm package page lists this repository and workflow,
-an `NPM_TOKEN` secret otherwise. It runs the self-check, verifies the release tag
-matches `package.json`'s version, then `npm publish --access public
---provenance`.
+Publishing is a manual step from this directory; the repository carries no CI
+publisher.
 
-- Trigger: publish a GitHub Release on a `v*` tag, or run the workflow manually.
-- Register it on the npm package page once — the `/access` "trusted publisher"
-  form wants exactly: repository `asd45183/dsh-weixin-ilink`, workflow filename
-  `publish.yml`, environment (leave empty unless a GitHub Environment gate is
-  also configured).
-- Manual fallback (no trusted-publisher registration yet): add an automation
-  token to the repo secret `NPM_TOKEN`; the workflow then uses it instead of OIDC.
-- Local fallback, which is how 0.9.0 shipped: `npm login` once against the
-  official registry, then
-  `npm publish --access public --registry https://registry.npmjs.org` from this
-  directory. A local publish carries **no** provenance attestation, and the
-  registry answers `202 Accepted` — the version becomes installable about a
-  minute later, so verify with `npm view dsh-weixin-ilink version`.
-- Publishing requires the official registry: this machine's `npm` defaults to
-  `registry.npmmirror.com`, where `npm whoami` fails and a publish lands on the
-  mirror contract instead of npm.
+1. `npm login` once against the official registry, bump `package.json`, commit,
+   tag `v<version>` and push the tag with a GitHub Release.
+2. Publish from the same commit:
+
+   ```sh
+   npm publish --access public --registry https://registry.npmjs.org
+   ```
+
+3. The registry answers `202 Accepted` and the version becomes installable about
+   a minute later, so confirm with
+   `npm view dsh-weixin-ilink version --registry https://registry.npmjs.org`.
+
+A local publish carries no provenance attestation.
+
+`npm` on this machine defaults to `registry.npmmirror.com`, where `npm whoami`
+fails and a publish does not reach npm — always pass `--registry` explicitly.
 
 ## Use
 
