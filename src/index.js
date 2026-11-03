@@ -295,7 +295,7 @@ export function apply(ctx, config) {
 
   const sendTo = async (accountId, conversationId, text) => {
     const acc = accounts.get(accountId)
-    if (acc === undefined) return
+    if (acc === undefined) return false
     try {
       await sendReply({
         baseUrl: String(acc.baseUrl || ILINK_BASE_URL).replace(/\/+$/, ''),
@@ -306,8 +306,10 @@ export function apply(ctx, config) {
         maxLength: config.maxMessageLength,
         warn,
       })
+      return true
     } catch (error) {
       errLog(`send failed: ${String(error)}`)
+      return false
     }
   }
 
@@ -635,7 +637,7 @@ export function apply(ctx, config) {
   }
 
   /** Prompt the chat for an approval and wait for its y/n reply (or the timeout, which fails closed). */
-  function requestApproval(accountId, conversationId, line, request) {
+  function requestApproval(accountId, conversationId, line, request, next) {
     const key = approvalKey(accountId, conversationId, line)
     return new Promise((resolve) => {
       let settled = false
@@ -654,12 +656,23 @@ export function apply(ctx, config) {
       request.signal?.addEventListener?.('abort', () => settle('cancelled'), { once: true })
       pendingApprovals.set(key, { settle })
       const reason = String(request.reason ?? '').trim()
-      void sendTo(accountId, conversationId, `🔐 需要审批（第 ${line + 1} 条线）\n工具: ${request.toolName}\n${reason ? `原因: ${reason}\n` : ''}\n回复 y 批准(仅本次) / n 拒绝`)
+      void sendTo(accountId, conversationId, `🔐 需要审批（第 ${line + 1} 条线）\n工具: ${request.toolName}\n${reason ? `原因: ${reason}\n` : ''}\n回复 y 批准(仅本次) / n 拒绝`).then((delivered) => {
+        // The chat is unreachable (channel down, send refused): defer to the
+        // answerers behind us (the Web GUI) instead of hanging until timeout.
+        if (delivered !== false || settled) return
+        settled = true
+        clearTimeout(timer)
+        pendingApprovals.delete(key)
+        void Promise.resolve().then(next).then(resolve, () => resolve('unavailable'))
+      })
     })
   }
 
   // Forward approval requests raised by OUR agents to their WeChat chat. Other
-  // sessions (the GUI) pass through to their own answerers.
+  // sessions (the GUI) pass through to their own answerers. `prepend` matters:
+  // when a Web GUI tab has this session open, the browser client's answerer
+  // sits earlier in the waterfall and would claim every approval — the chat
+  // then never receives a prompt. WeChat owns its own sessions' approvals.
   ctx.on('approval/request', (request, next) => {
     const target = bridge.targetForSession(request.agent?.session?.id)
     if (target === undefined) return next()
@@ -667,8 +680,8 @@ export function apply(ctx, config) {
     if (trust.active(approvalKey(target.accountId, target.conversationId, line))) {
       return Promise.resolve('allowed-once')
     }
-    return requestApproval(target.accountId, target.conversationId, line, request)
-  })
+    return requestApproval(target.accountId, target.conversationId, line, request, next)
+  }, { prepend: true })
 
   ctx.effect(() => {
     const abort = new AbortController()
