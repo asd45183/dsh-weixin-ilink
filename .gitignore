@@ -5,3 +5,6 @@ node_modules/
 accounts/
 out_log/
 logs/
+
+# 本机 npm install 生成，不随源码发布
+package-lock.json
