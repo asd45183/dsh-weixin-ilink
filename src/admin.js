@@ -5,6 +5,7 @@ import path from 'node:path'
 import { stateDir, listAccountIds, loadAccount, clearAccount, listConversations, saveAccount, registerAccountId } from './state.js'
 import { fetchQrCode, pollQrStatus, ILINK_BASE_URL } from './transport/ilink.js'
 import QRCode from 'qrcode'
+import { readPersonaStore } from './persona.js'
 
 const SETTINGS_FILE = () => path.join(stateDir(), 'settings.json')
 const SENDERS_FILE = () => path.join(stateDir(), 'recent-senders.json')
@@ -93,6 +94,11 @@ function validatePatch(patch) {
     } else if (enumKeys[key]) {
       if (!enumKeys[key].includes(value)) throw Object.assign(new Error(`${key} 取值不合法。`), { status: 400 })
       clean[key] = value
+    } else if (key === 'personaDefaultMode') {
+      if (typeof value !== 'string' || !value.trim() || value.length > 64) throw Object.assign(new Error('默认人格模式格式不正确。'), { status: 400 })
+      const modes = readPersonaStore(stateDir()).map((mode) => mode.id)
+      if (!modes.includes(value.trim())) throw Object.assign(new Error('没有这个预设人格模式。'), { status: 400 })
+      clean[key] = value.trim()
     } else if (key === 'workspace') {
       if (typeof value !== 'string' || value.length > 500 || /[\0\r\n]/.test(value)) throw Object.assign(new Error('工作目录格式不正确。'), { status: 400 })
       clean[key] = value.trim()
@@ -112,7 +118,7 @@ export class WeixinAdmin {
   settings() {
     const overrides = readOverrides()
     const merged = {}
-    for (const key of [...boolKeys, ...listKeys, ...Object.keys(enumKeys), 'workspace']) {
+    for (const key of [...boolKeys, ...listKeys, ...Object.keys(enumKeys), 'workspace', 'personaDefaultMode']) {
       merged[key] = overrides[key] !== undefined ? overrides[key] : this.config[key]
     }
     return merged
@@ -139,6 +145,12 @@ export class WeixinAdmin {
       settings: this.settings(),
       conversations: { count: conversations.length, lastInboundAt: latest || null },
       senders,
+      persona: (() => {
+        try {
+          const modes = readPersonaStore(stateDir()).map((mode) => ({ id: mode.id, name: mode.name || mode.id, builtin: mode.builtin === true, preview: String(mode.prompt || '').replace(/\s+/g, ' ').slice(0, 80) }))
+          return { defaultMode: this.config.personaDefaultMode || 'default', modes }
+        } catch { return { defaultMode: this.config.personaDefaultMode || 'default', modes: [] } }
+      })(),
       login: this.login ? this.loginState() : null,
       note: '登录/退出在保存凭证后立即生效；白名单和开关保存后立即用于新消息；工作目录、权限预设和账号轮询范围需要重启 DSH。',
     }

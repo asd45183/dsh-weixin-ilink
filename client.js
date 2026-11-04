@@ -145,6 +145,19 @@ window.__ModuleLoader__.load({
           ))) : note('还没有记录到发送者；收到消息后会出现在这里。')
         ),
 
+        state && section('人格模式',
+          note('默认人格只影响“新会话”；已有会话用 /mode 单独覆盖。当前默认：' + (state.persona?.modes.find(mode => mode.id === state.persona?.defaultMode)?.name || state.persona?.defaultMode || 'default')),
+          h('label', { style: row }, '默认人格',
+            h('select', { value: state.persona?.defaultMode || 'default', onChange: event => { const value = event.target.value; setState(current => ({ ...current, persona: { ...current.persona, defaultMode: value } })); void save({ personaDefaultMode: value }) }, style: { ...control, width: 'auto' } },
+              ...(state.persona?.modes || []).map(mode => h('option', { key: mode.id, value: mode.id }, `${mode.name}${mode.id === 'default' ? '（默认助手）' : ''}`))
+            )
+          ),
+          ...(state.persona?.modes || []).map(mode => h('div', { key: mode.id, style: { ...column, borderLeft: '2px solid var(--dsw-alias-border-l2)', paddingLeft: 8 } },
+            h('strong', null, `${mode.name} · ${mode.id}${mode.builtin ? ' · 内置' : ''}`),
+            mode.preview ? note(mode.preview) : note('空提示词，等同默认助手。')
+          ))
+        ),
+
         state && section('运行',
           toggle('enabled', '启用通道'),
           toggle('mediaEnabled', '收发媒体（图片/文件/语音/视频）'),
