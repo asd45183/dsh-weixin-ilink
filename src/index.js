@@ -75,6 +75,10 @@ import { formatModelList, listModelChoices, resolveModelChoice } from './model-c
 import { TrustStore, parseTrustDuration } from './trust.js'
 import { extractMedia, sendReply, sendMediaFiles } from './outbound.js'
 import { CDN_ALLOWLIST, downloadMedia, mediaAllowlist } from './media.js'
+import { applyOverrides, WeixinAdmin, recordRecentSender } from './admin.js'
+import { createSettingsRoute } from './settings/route.js'
+import { bindSettingsRoutes } from './settings/transport.js'
+
 
 export const name = 'dsh-weixin-ilink'
 
@@ -130,8 +134,15 @@ export function apply(ctx, config) {
   const warn = (line) => ctx.logger?.warn?.(`dsh-weixin-ilink: ${line}`)
   const errLog = (line) => ctx.logger?.error?.(`dsh-weixin-ilink: ${line}`)
 
+  // 设置页保存的覆盖项优先于 cordis 配置；在白名单/开关上立即生效。
+  applyOverrides(config)
+  const admin = new WeixinAdmin({ config, log, warn })
+  const settingsBinding = bindSettingsRoutes(ctx, () => createSettingsRoute({ admin, log: errLog }))
+  void settingsBinding.ready().catch((error) => warn(`settings routes unavailable: ${String(error)}`))
+
   if (config.enabled === false) {
     log('disabled by configuration; registering no loop')
+    ctx.effect(() => () => void settingsBinding.dispose())
     return
   }
 
@@ -728,6 +739,7 @@ export function apply(ctx, config) {
       abort.abort()
       proactiveScheduler.stop()
       void bridge.dispose()
+      void settingsBinding.dispose()
     }
   })
 }
@@ -964,6 +976,7 @@ async function handleInbound({ ctx, config, account, accountId, bridge, msg, log
       return
     }
   }
+  try { recordRecentSender(accountId, msg.senderId, msg.isGroup === true) } catch {}
   log(`inbound from=${safeId(msg.senderId)} conv=${safeId(msg.conversationId)} len=${msg.text.length} media=${msg.media?.length ?? 0}`)
   const bond = recordConversationInbound(accountId, msg.conversationId, Date.now(), msg.isGroup === true)
   proactiveScheduler?.noteInbound(accountId)

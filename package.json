@@ -1,16 +1,18 @@
 {
   "name": "dsh-weixin-ilink",
-  "version": "0.9.3",
+  "version": "0.10.0",
   "description": "Weixin iLink channel for DeepSeek Harness — text, media, persona modes, companion pacing and proactive messages.",
   "type": "module",
   "license": "MIT",
   "main": "src/index.js",
   "exports": {
     ".": "./src/index.js",
+    "./client": "./client.js",
     "./package.json": "./package.json",
     "./cordis.patch.yml": "./cordis.patch.yml"
   },
   "files": [
+    "client.js",
     "src",
     "bin",
     "cordis.patch.yml",
@@ -25,7 +27,8 @@
     "dsh": ">=0.2.1-alpha.4 <0.3.0"
   },
   "dependencies": {
-    "@deepseek-ai/schemastery": "~3.18.4"
+    "@deepseek-ai/schemastery": "~3.18.4",
+    "qrcode": "^1.5.4"
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.4",
@@ -50,7 +53,13 @@
     "bundle": {
       "patch": "./cordis.patch.yml"
     },
-    "manifestVersion": 1
+    "manifestVersion": 1,
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-settings-general"
+      ]
+    }
   },
   "publishConfig": {
     "access": "public"
@@ -66,7 +75,7 @@
     "persona"
   ],
   "scripts": {
-    "test": "node test/selfcheck.mjs"
+    "test": "node test/selfcheck.mjs && node test/admin.test.mjs"
   },
   "repository": {
     "type": "git",
