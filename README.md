@@ -1,272 +1,184 @@
 # dsh-weixin-ilink
 
-Weixin iLink channel plugin for DeepSeek Harness — text, media, persona modes, companion pacing and proactive messages.
+把个人微信接到 DeepSeek Harness 的通道插件：一条微信消息就能驱动 DSH 里的 agent，支持文字、图片、文件、语音、群聊、人格模式和主动消息。
 
-> **Risk:** iLink is a reverse-engineered personal-WeChat protocol, not an official Tencent bot API. Bind a spare account; account restrictions are possible.
+> **风险提示**：iLink 是逆向的个人微信协议，不是腾讯官方机器人接口。建议绑定**小号**，账号被限制/封禁的风险自行承担。
 
-## What it does
+## 功能
 
-- Long-polls every bound WeChat account and drives one DSH agent session per conversation; replies are chunked and echo the peer's `context_token`.
-- Deny-by-default allowlist, opt-in first-contact setup, group chats with mention gating.
-- Full agent toolset: mounts the profile's default agent preset, applies a `permissionPreset`, and forwards approval prompts to the chat for `y`/`n`.
-- Inbound image/file/voice/video download + AES-128-ECB decrypt; outbound `MEDIA:` upload and send.
-- Slash commands answered locally, plus session-line management with auto-archive and explicit delete.
-- Persona modes with life state, companion pacing and optional proactive messages.
-- Configurable workspace: the agent's `cwd`, the `workspace-write` boundary, and a project in the Web sidebar.
+- 长轮询已绑定的微信账号，每个会话对应一个 DSH agent 会话；回复按长度分段并回传 `context_token`
+- 默认拒绝：白名单机制，首次接触需显式开启；群聊默认关闭，开启后只回复被 @ 的消息
+- 挂载 profile 的默认 agent 预设和完整工具集；需要审批的操作转发到微信，回复 `y`/`n`
+- 收发图片、文件、语音、视频：入站 CDN 下载 + AES-128-ECB 解密，出站 `MEDIA:` 上传
+- 斜杠命令本地应答；会话线（line）管理、自动归档、显式删除
+- 人格模式、生活状态、拟人节奏（分段、延迟）、可选主动消息
+- 可配置工作目录：agent 的 `cwd`，也是 `workspace-write` 的写入边界，并注册为 Web 侧边栏项目
+- 通过 `weixinPush` 服务供同一 DSH 内的其他插件推送提醒（例如抖音登录二维码）
 
-## What it is
+## 环境要求
 
-A DSH cordis bundle that turns a bound personal WeChat account (via Tencent's iLink Bot API) into a remote control surface for a DSH agent. Protocol ported from a clean first-party Python adapter — same endpoints, same AES key handling, same random `X-WECHAT-UIN` (not the real UIN), `0600` credential storage.
+| 项 | 要求 |
+| --- | --- |
+| Node.js | ≥ 22.13 |
+| DSH | `>=0.2.1-alpha.4 <0.3.0`（以 `package.json` 的 `engines.dsh` 为准） |
+| 系统 | macOS / Linux；Windows 未验证 |
+| 账号 | 建议使用个人微信小号，主号有被封风险 |
 
-The plugin injects `agents` + `agentDefaultModel`, so it runs on the profile's default model route. State lives in `~/.dsh/weixin-own/` (override the tree with `DSH_WEIXIN_OWN_STATE_DIR`):
+## 安装
 
-```
-~/.dsh/weixin-own/
-  accounts/<id>.json           credential, 0600
-  accounts/accounts.json       bound account index
-  accounts/<id>.sync.json      long-poll cursor
-  accounts/<id>.context-tokens.json
-  sessions/                    default workspace for WeChat sessions
-  media/<conv>/<msg>/          decrypted inbound attachments
-  session-lines.json           active line per conversation
-  proactive.json               runtime override written by /proactive
-  persona-modes.json           per-conversation persona modes
-```
-
-## Install into a DSH profile
+### 从 npm 安装（推荐）
 
 ```sh
-# from this package dir
+dsh plugin --profile web add dsh-weixin-ilink@0.9.3
+```
+
+安装后**完全退出并重新打开 DSH**。包自带 `cordis.patch.yml`，会自动插入 `id: dsh-weixin-own` 的插件行。
+
+### 从源码安装
+
+```sh
+git clone https://github.com/asd45183/dsh-weixin-ilink.git
 cd dsh-weixin-ilink
-# link or publish; then in the profile:
-dsh plugin --profile web add dsh-weixin-ilink   # or add to profile package.json dsh.profile.bundles
+npm install
+dsh plugin --profile web add .
 ```
 
-The package declares `dsh.bundle.patch` and ships `cordis.patch.yml`, whose `insert` row is `id: dsh-weixin-own`.
-
-## Use
+## 绑定微信账号
 
 ```sh
-# 1. bind a WeChat account (scan with WeChat)
 node bin/login.js
-
-# 2. first-run setup only: set allowFirstContact: true, send one message,
-#    copy the full sender id from the warn line, then add it and turn the flag off:
-#      config:
-#        allowFirstContact: false
-#        allowedSenders: ["wxid_xxx"]
-
-# 3. reload DSH; send a message to the bound account from WeChat.
-#    One agent session per conversation; the reply is the assistant text.
 ```
 
-Startup writes one line to stderr — `[dsh-weixin-ilink] workspace=… preset=…` — followed by the GUI registration result. `ctx.logger` is not exported by every host, so stdout may stay empty.
+用微信扫码登录。凭据保存在 `~/.dsh/weixin-own/accounts/<id>.json`（权限 `0600`），不要提交到仓库或发给别人。
 
-### Chat commands
+- 只绑一个账号时，配置里 `accountId` 留空即可
+- 绑定多个账号时，用 `accountId` 指定要服务的那一个
 
-| Send | Effect |
-|---|---|
-| `/help` | list the commands below |
-| `/status` | account, model, mode, session id, workspace, allowlist count, life state, proactive status |
-| `/workspace` | show this line's workspace (read-only; see [How to switch the workspace](#how-to-switch-the-workspace)) |
-| `/cancel` | interrupt the running turn (bypasses the per-conversation queue) |
-| `/model` | list models; `/model 2` or `/model provider/model` switches for the next request |
-| `/models` | list only; `/model list` is an alias |
-| `/mode` | list persona modes; `/mode 女友` switches (and opens a new line) |
-| `/new` | open a fresh session line (archives the line it leaves) |
-| `/list` | list session lines with `有会话`/`空` and whether each is archived |
-| `/use <n>` | switch to an existing line (unarchives it) |
-| `/delete <n> [confirm]` | delete one line's stored history — no action without `confirm` |
-| `/compact` | compact older history now (same as the Web `/compact`) |
-| `/clear` | clear the current context and open a fresh line |
-| `/trust [10m\|off]` | temporarily skip approval prompts on this session line (max 8h, in-memory) |
-| `/proactive on\|off` | toggle proactive messages for this account |
-| `/plan` `/permission` `/goal` `/feedback` `/export` | forwarded to the host's own DSH commands |
-| `y` / `n` | answer a pending approval prompt (`批准`/`拒绝` also work) |
+## 配置
 
-### Config keys
-
-| Key | Default | Meaning |
-|---|---|---|
-| `enabled` | `true` | start the long-poll loops when the plugin loads |
-| `accountId` | `""` | serve exactly this account; empty serves every saved one |
-| `allowedSenders` | `[]` | Weixin ids allowed to drive the agent; empty denies unless `allowFirstContact` is true |
-| `allowFirstContact` | `false` | first-run setup only: allow the first sender once so you can copy its id into `allowedSenders` |
-| `workspace` | `""` | agent `cwd` for WeChat sessions (`~` and relative paths supported); empty = `~/.dsh/weixin-own/sessions`. Also the `workspace-write` boundary |
-| `autoArchive` | `true` | archive the line `/new` or `/use` leaves, and every inactive line at load, so one chat keeps one visible session |
-| `permissionPreset` | `workspace-write` | `danger-full-access` lets a WeChat message write the whole disk with no approval — trusted account only |
-| `turnTimeoutMs` | `600000` | cancel a turn running longer than this |
-| `approvalTimeoutMs` | `300000` | approval prompt waits this long, then fails closed (`unavailable`) |
-| `typingIndicator` | `true` | show "typing…" while the agent works (best-effort) |
-| `progressAfterMs` | `20000` | send one "still working" note after this long; `0` disables |
-| `maxMessageLength` | `2000` | max characters per outbound message |
-| `mediaEnabled` | `true` | download/decrypt inbound media and send outbound `MEDIA:` files |
-| `cdnBaseUrl` | `""` | media CDN root; empty uses the upstream default |
-| `mediaTimeoutMs` | `120000` | timeout for one CDN download/upload |
-| `mediaAllowedHosts` | `[]` | extra hostnames allowed for media fetch; empty = the WeChat CDN allowlist only |
-| `imageAsFile` | `true` | send images as file attachments; `false` sends image bubbles |
-| `groupChatEnabled` | `false` | serve group chats (senders are still checked against `allowedSenders`) |
-| `groupReplyWhen` | `mention` | in a group, answer only messages starting with `@` (`all` answers everything) |
-| `allowedGroups` | `[]` | group ids that may drive the agent when groups are on; empty = any group |
-| `personaDefaultMode` | `default` | default mode; `default` is the plain assistant |
-| `lifeState` | `true` | inject mood/activity/energy in companion modes |
-| `humanPacing` | `true` | delay the first bubble and split companion replies into 2–3 bubbles |
-| `replyDelayMaxMs` | `2400` | upper bound for the pre-reply delay |
-| `bubbleSplitMax` | `3` | max bubbles per companion reply |
-| `bubbleGapMs` | `700` | base pause between bubbles |
-| `proactiveEnabled` | `false` | allow companion modes to speak first |
-| `proactiveMinGapMinutes` | `180` | minimum gap since the user's last message |
-| `proactiveMaxPerDay` | `3` | daily proactive cap per account |
-| `proactiveWindowStart` / `End` | `09:00` / `23:00` | proactive window (local `HH:mm`) |
-
-### Workspace
-
-`workspace` is the agent's `cwd`, and under the default `workspace-write` preset it is also the sandbox's write boundary: writes inside need no approval, writes outside prompt in the chat for `y`/`n`.
+在 profile 的 `cordis.patch.yml`（或插件配置层）中追加：
 
 ```yaml
 - id: dsh-weixin-own
   name: "dsh-weixin-ilink"
   config:
-    workspace: "~/weixin-scratch"   # or /abs/path; "~/x" and relative paths supported
+    enabled: true
+    accountId: ""                 # 空 = 使用唯一已保存账号
+    allowedSenders:               # 默认拒绝；填入允许驱动 agent 的微信 id
+      - wxid_xxxxxxxx
+    allowFirstContact: false      # 仅首次配置时临时开启
+    workspace: "~/weixin-workspace"
+    permissionPreset: workspace-write
+    mediaEnabled: true
+    imageAsFile: false            # false = 图片气泡；true = 文件附件
+    groupChatEnabled: false
+    groupReplyWhen: mention       # 群聊只在被 @ 时回复
 ```
 
-- Empty (default) keeps `~/.dsh/weixin-own/sessions/`.
-- The directory is created on demand; an unusable path logs an error and falls back to the default instead of disabling the channel.
-- All accounts and conversations share one workspace, so two chats can see each other's files. Point it at a scratch directory rather than a repo you care about if more than one person can message the bound account.
+### 常用配置项
 
-#### Where it shows up in the Web GUI
+| 键 | 默认 | 说明 |
+| --- | --- | --- |
+| `enabled` | `true` | 插件加载后是否启动轮询 |
+| `accountId` | `""` | 只服务指定账号；空 = 所有已保存账号 |
+| `allowedSenders` | `[]` | 允许驱动 agent 的微信 id；为空时默认拒绝 |
+| `allowFirstContact` | `false` | 首次配置用：临时允许第一个发送者，用于复制 id |
+| `workspace` | `""` | agent 的 `cwd` 与写入边界；空 = `~/.dsh/weixin-own/sessions` |
+| `permissionPreset` | `workspace-write` | 改成 `danger-full-access` 会让微信消息可写整盘，仅限完全可信账号 |
+| `turnTimeoutMs` | `600000` | 单轮超时（10 分钟）后取消 |
+| `approvalTimeoutMs` | `300000` | 审批提示等待时间，超时按拒绝处理 |
+| `mediaEnabled` | `true` | 入站媒体下载解密、出站媒体上传 |
+| `imageAsFile` | `true` | 发送图片的方式；`false` 显示为图片气泡 |
+| `groupChatEnabled` | `false` | 是否服务群聊 |
+| `groupReplyWhen` | `mention` | 群聊触发方式：`mention` 仅 @，`all` 全部 |
+| `typingIndicator` | `true` | 处理中显示“正在输入” |
+| `proactiveEnabled` | `false` | 人格模式是否允许 agent 先开口 |
 
-A configured `workspace` is registered with the host's `workspaceRegistry` at plugin load and attached to every session the bridge opens, so the sidebar shows it as a project with the WeChat sessions listed under it.
+完整配置项见仓库 `src/index.js` 的 Config schema 或 `cordis.patch.yml` 注释。
 
-- Only an explicit `workspace` is registered. With the default `~/.dsh/weixin-own/sessions` the channel stays out of the sidebar.
-- Registration happens on load; a workspace deleted in the GUI comes back on the next DSH start (the registry entry is recreated, idempotently).
-- A session appears after the first real message opens it. `/workspace` and `/new` answer without opening a session, so send a message after `/new`.
-- A line still running in the previous workspace cannot be attached (its recorded cwd differs); it keeps working there and shows up under no project. `/new` fixes it.
-- Profiles without a workspace registry (headless) skip this silently.
+## 首次使用（白名单）
 
-#### How to switch the workspace
+1. 保持 `allowedSenders: []`，先把 `allowFirstContact` 设为 `true`
+2. 重启 DSH，用微信给绑定的账号发一条消息
+3. 查看 DSH 日志里的 warn 行，复制完整的 sender id
+4. 把该 id 填入 `allowedSenders`，并把 `allowFirstContact` 改回 `false`
+5. 重启 DSH
 
-There is **no chat command that sets the workspace** — the chat can only read it (`/workspace`, `/status`). A WeChat message must never choose its own sandbox write boundary, so switching is a profile-config change made on the host:
+之后只有白名单内的发送者能驱动 agent，其他人发消息不会得到回复。
 
-1. Edit the active profile's patch, `$DSH_HOME/profiles/<profile>/cordis.patch.yml` (usually `~/.dsh/profiles/web/cordis.patch.yml`), and set the value on the existing row — keep the other keys as they are:
+## 常用聊天命令
 
-   ```yaml
-   - id: dsh-weixin-own
-     name: "dsh-weixin-ilink"
-     config:
-       allowedSenders: ["wxid_xxx"]     # unchanged
-       workspace: "~/projects/scratch"  # the new workspace
-   ```
+| 发送 | 效果 |
+| --- | --- |
+| `/help` | 列出所有命令 |
+| `/status` | 账号、模型、模式、会话 id、工作目录、白名单数量 |
+| `/model` | 列出模型；`/model 2` 或 `/model provider/model` 切换 |
+| `/mode` | 列人格模式；`/mode 女友` 切换并新开会话线 |
+| `/new` | 新开一条会话线 |
+| `/list` / `/use <n>` / `/delete <n> confirm` | 会话线管理 |
+| `/compact` / `/clear` | 压缩或清空当前上下文 |
+| `/cancel` | 中断当前轮次 |
+| `/trust [10m\|off]` | 临时跳过审批提示（仅在内存中，最长 8 小时） |
+| `/proactive on\|off` | 开关主动消息 |
+| `y` / `n` | 批准或拒绝待处理的审批 |
 
-2. Save. With `dsh-hmr` enabled (the `web` template ships it on) the profile is recomposed immediately; otherwise restart DSH. Config-only changes do not need a code restart.
-3. In WeChat send `/new` (or `/clear`) — **required**: a session records its cwd at creation, so an existing line keeps resuming in the old directory.
-4. Send `/workspace` (or `/status`) to confirm the new path.
-
-To apply one workspace to every profile instead, put the same row config in the home patch `$DSH_HOME/cordis.patch.yml`; it outranks each profile patch.
-
-#### Reading the workspace from the chat
-
-| Send | Answer |
-|---|---|
-| `/workspace` | current line's directory, plus the configured value when the two differ (i.e. after a config change, before `/new`) |
-| `/status` | one `工作区：…` line among the other status lines |
-
-Both are read-only. Nothing in a chat message can change the workspace, the permission preset, or the write boundary.
-
-### Session lines
-
-Every chat can hold several session lines; a line is an independent Session, so each keeps its own context and history. `/new` (and `/clear`, which is the same operation) never deletes anything — it disposes the in-memory agent and advances `~/.dsh/weixin-own/session-lines.json`, so the next message opens session `weixin-<conv>-<hash>--<n>`.
-
-Lifecycle of a line that is left behind:
-
-- **Archived automatically** (`autoArchive`, default on) — `/new` and `/use` archive the line they leave, and a load archives every inactive line, so the GUI project shows one WeChat session per chat. Archived sessions stay on disk, stay listed by `/list` as `已归档`, and `/use <n>` unarchives the one you switch back to.
-- **Deleted only on request** — `/delete <n> confirm` removes that line's stored session directories, its archive/pin entries and its workspace membership. Two steps, because it is not recoverable: `/delete <n>` first shows the session id and what would be lost.
-
-Details:
-
-- Line numbers only grow; deleting a line leaves a `空` number behind, and `/list` marks it.
-- Deleting the active line advances to a fresh empty line, so the deleted transcript cannot be resumed by the next message.
-- Session directories are found by scanning `$DSH_HOME/sessions/*/<session id>`; the id is validated before any removal, so a line can never name a path.
-- A session cannot be deleted while its turn runs (`/cancel` first). A GUI archive hides a session but never deletes files.
-
-### Media
-
-**Inbound.** An image/file/voice/video item is downloaded from the CDN with its `encrypt_query_param` (or allowlisted `full_url`), decrypted with AES-128-ECB + PKCS7, and written to `~/.dsh/weixin-own/media/<conversation>/<message>/`. The agent sees the caption (may be empty) plus one line per attachment:
+## 数据目录
 
 ```
-[附件 图片] /Users/you/.dsh/weixin-own/media/<conv>/<msg>/image-0.png (12345 bytes)
+~/.dsh/weixin-own/
+  accounts/<id>.json              账号凭据，0600
+  accounts/accounts.json          已绑定账号索引
+  accounts/<id>.sync.json         长轮询游标
+  accounts/<id>.context-tokens.json
+  sessions/                       微信会话的默认工作目录
+  media/<conv>/<msg>/             入站附件解密结果
+  session-lines.json              每个会话的当前会话线
+  persona-modes.json              每个会话的人格模式
+  proactive.json                  /proactive 的运行时覆盖
 ```
 
-A failed download becomes `[附件下载失败:图片] <reason>` instead of dropping the message. Set `mediaEnabled: false` to turn the whole path off.
+其他目录可用 `DSH_WEIXIN_OWN_STATE_DIR` 覆盖。
 
-**Outbound.** The agent writes a local file and puts a `MEDIA:` tag on its own line in the reply:
+## 与其他 DSH 插件联动
 
-```
-已经画好了，见下图。
-MEDIA:/tmp/chart.png
-```
+插件向同一 DSH 提供 `weixinPush` 服务，只发给 `allowedSenders` 的第一个会话：
 
-The tag is stripped from the visible text, the file is uploaded to the CDN (AES-128-ECB, `getUploadUrl` → `x-encrypted-param`) and sent as an IMAGE item for `image/*` or a FILE item otherwise. Missing paths are skipped with a warning rather than failing the reply. `cdnBaseUrl` overrides the CDN root.
-
-### Behavior notes
-
-- **Persona/pacing/proactive are companion-only.** The stock `default` mode never gets a life block, a first-bubble delay, split bubbles, or proactive messages. `proactiveEnabled` is off by default; `/proactive on` writes a runtime override under `~/.dsh/weixin-own/proactive.json`.
-- **The iLink session expires after a quiet period.** Every send then answers `ret: -2, errmsg: "prepare failed"`, including plain text — so "the image never arrived" is often "nothing was sent". The first retry drops `context_token`; receiving a fresh message from the user restores the session.
-- **Images need `media_type: 1` on `getUploadUrl`.** The upload path infers IMAGE/VIDEO from the file extension; images still default to a file attachment (`imageAsFile: true`), and `imageAsFile: false` sends bubbles.
-
-### Multiple accounts
-
-Every account in `~/.dsh/weixin-own/accounts/accounts.json` is served concurrently; set `accountId` to serve exactly one. Each account keeps its own sync cursor, dedupe window, first-contact record and approval prompts.
-
-Session ids include the account (`weixin-<conv>-<hash(account,conv)>`), so two accounts talking to the same peer never share one agent session. A conversation that predates this split still resumes its old session: the bridge tries the per-account id, then the legacy conversation-only id, then creates a new session.
-
-Approval forwarding: when one of *our* agents raises `approval/request`, the plugin sends the tool name and reason to the chat and waits for `y`/`n`. GUI sessions are untouched (the listener calls `next()` for them). A timed-out prompt resolves `unavailable`, so the action fails closed rather than silently proceeding.
-
-## Network egress (complete)
-
-- `https://ilinkai.weixin.qq.com` — API (login QR, long-poll, send, getUploadUrl, config, typing)
-- `https://novac2c.cdn.weixin.qq.com/c2c` — media CDN (download + upload)
-
-Nothing else. Every media URL — including a peer-supplied `full_url` — is checked against an explicit WeChat CDN host allowlist before a socket is opened, so an inbound message cannot make the bridge fetch internal addresses (SSRF). No telemetry, no analytics, no `readLinks` (your IP never goes to URLs you receive).
-
-## Security notes
-
-- Credential (`token`) stored `0600` at `~/.dsh/weixin-own/accounts/<id>.json`.
-- `X-WECHAT-UIN` is a random uint32 per request, not the real WeChat UIN.
-- Token goes only to the iLink/WeChat HTTPS origin that issued it (`*.weixin.qq.com`), as `Authorization: Bearer`.
-- IDs are truncated to 8 chars in logs; the opt-in first-contact setup hint is the one exception. Message bodies are not logged.
-- The workspace is the write boundary: `workspace-write` still asks before writing outside it, and no chat message can change the workspace or the preset.
-
-## Layout
-
-```
-src/
-  index.js            — DSH plugin entry: Config + apply + poll loop + dedup + media wiring
-  state.js            — ~/.dsh/weixin-own/accounts/<id>.json (0600) + sync buf + context tokens + media dirs
-  agent-bridge.js     — one DSH agent session per conversation; lines, archive hooks, followup → whenIdle → reply
-  session-reader.js   — read settled assistant reply out of snapshotEvents()
-  session-files.js    — locate and delete one session's directories (path-safe, no DSH imports)
-  commands.js         — slash-command parsing + HELP_TEXT + `/workspace` reply text (no DSH imports, testable standalone)
-  admission.js        — deny-by-default allowlist + first-contact + group gates
-  model-catalog.js    — provider/model listing + `/model` argument resolution
-  trust.js            — `/trust` duration parsing + timed per-line approval grants
-  memo.js             — single-flight memoization (concurrent callers share one in-flight op)
-  persona.js          — persona mode catalog + per-conversation overrides + prompt block
-  life-state.js       — deterministic mood/activity/energy snapshot + prompt block
-  human-pace.js       — companion first-bubble delay + reply splitting
-  proactive.js        — proactive decision rules + scheduler
-  quiet-hours.js      — HH:mm window parsing
-  media.js            — AES-128-ECB CDN download/upload + SSRF allowlist
-  outbound.js         — chunkText + sendReply + `MEDIA:` extraction + media send
-  transport/
-    ilink.js          — iLink API: getUpdates/sendMessage/sendItemMessage/getUploadUrl/getConfig/sendTyping/QR
-bin/
-  login.js            — terminal QR login
-test/
-  selfcheck.mjs       — assert self-check (state, workspace resolution, session files/lines, normalizeInbound, chunkText, media crypto/SSRF/CDN, session-reader)
-cordis.patch.yml      — profile insert row
+```js
+const push = ctx.get('weixinPush')
+await push.toOwner({ text: '需要处理', imagePath: '/path/to/qr.png' })
 ```
 
-## Attribution
+抖音插件用它推送登录二维码/身份验证截图；如未配置白名单或媒体发送被关闭，会返回明确的 `ok: false`。
 
-`persona.js`, `life-state.js`, `human-pace.js`, `proactive.js` and `quiet-hours.js` are ported from [`dsh-plugin-weixin@0.9.8`](https://github.com/panqing0313/dsh-plugin-weixin) (MIT). The transport, media and agent bridge remain the minimal first-party implementation in this package.
+## 常见问题
+
+**微信发了消息没回复**
+- 检查 `enabled` 是否为 true、DSH 是否在运行
+- 检查发送者是否在 `allowedSenders` 内；首次配置用 `allowFirstContact`
+- 检查账号凭据是否过期（重新执行 `node bin/login.js`）
+
+**群聊不回复**
+- 需要 `groupChatEnabled: true`，并确保群在 `allowedGroups`（为空表示任意群）
+- 消息需要以 `@机器人` 开头（`groupReplyWhen: mention`）
+
+**图片在微信里显示“已过期或已清理”**
+- 把 `imageAsFile` 设为 `false`，改用图片气泡发送
+
+**权限提示太多**
+- 确认 `permissionPreset` 是 `workspace-write`，并让工作目录覆盖常用路径
+- 临时可用 `/trust 10m` 跳过提示，但不要长期开启
+
+**重启后没有恢复**
+- DSH 需要保持运行；退出 DSH 后通道不会继续轮询
+- 检查 `~/.dsh/weixin-own/accounts/` 下的凭据是否还在
+
+## 安全
+
+- 这是逆向协议，平台可能调整；账号存在被限制的风险，建议只用小号
+- 凭据文件权限为 `0600`，不要复制到其他机器或提交到仓库
+- `danger-full-access` 会让微信消息拥有整盘写入权限，只对完全可信的账号和会话开启
+- `workspace` 内的写入不需要审批，工作区外会转发审批提示
+
+## 许可
+
+MIT。第三方组件与来源见 [NOTICE](NOTICE) 与 [LICENSE](LICENSE)。

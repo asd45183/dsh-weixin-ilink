@@ -151,6 +151,35 @@ export function apply(ctx, config) {
     return
   }
 
+  // 供同一 DSH 内的其它插件把提醒（例如抖音登录二维码）推给允许的微信会话。
+  // 只发给 allowedSenders 的第一个会话，不新建联系人、不改白名单。
+  try {
+    ctx.provide('weixinPush', {
+      async toOwner({ text = '', imagePath = null } = {}) {
+        const target = (config.allowedSenders || [])[0]
+        if (!target) return { ok: false, error: '未配置允许的微信发送者' }
+        const entry = [...accounts.entries()][0]
+        if (!entry) return { ok: false, error: '没有可用的微信账号' }
+        const [accountId, account] = entry
+        if (!account?.token) return { ok: false, error: '微信账号缺少 token' }
+        const baseUrl = String(account.baseUrl || ILINK_BASE_URL).replace(/\/+$/, '')
+        const contextToken = loadContextToken(accountId, target)
+        if (text) {
+          const reply = await sendReply({ baseUrl, token: account.token, to: target, text, contextToken, maxLength: config.maxMessageLength, warn })
+          if (reply.error !== undefined) return { ok: false, error: String(reply.error) }
+        }
+        if (imagePath) {
+          if (config.mediaEnabled === false) return { ok: false, error: '微信媒体发送已关闭' }
+          const result = await sendMediaFiles({ baseUrl, token: account.token, cdnBaseUrl: String(config.cdnBaseUrl || CDN_BASE_URL).replace(/\/+$/, ''), to: target, paths: [imagePath], contextToken, imageAsFile: config.imageAsFile, warn })
+          if (!result.sent) return { ok: false, error: `图片未发送：${JSON.stringify(result.skipped || [])}` }
+        }
+        return { ok: true, target }
+      },
+    })
+  } catch (error) {
+    warn(`weixinPush service unavailable: ${String(error)}`)
+  }
+
   // The agent's cwd is also its `workspace-write` boundary, so a bad
   // `workspace` must not take the whole channel down: log loudly and fall back
   // to the default state directory instead of refusing every message.
