@@ -29,7 +29,7 @@
 ### 从 npm 安装（推荐）
 
 ```sh
-dsh plugin --profile web add dsh-weixin-ilink@0.9.3
+dsh plugin --profile web add dsh-weixin-ilink@0.10.3
 ```
 
 安装后**完全退出并重新打开 DSH**。包自带 `cordis.patch.yml`，会自动插入 `id: dsh-weixin-own` 的插件行。
