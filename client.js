@@ -146,7 +146,7 @@ window.__ModuleLoader__.load({
         ),
 
         state && section('人格模式',
-          note('默认人格只影响“新会话”；已有会话用 /mode 单独覆盖。当前默认：' + (state.persona?.modes.find(mode => mode.id === state.persona?.defaultMode)?.name || state.persona?.defaultMode || 'default')),
+          note('没有用 /mode 单独设置过的会话（包括新会话）都会用这个默认人格；显式设置过的会话保持原样。当前默认：' + (state.persona?.modes.find(mode => mode.id === state.persona?.defaultMode)?.name || state.persona?.defaultMode || 'default')),
           h('label', { style: row }, '默认人格',
             h('select', { value: state.persona?.defaultMode || 'default', onChange: event => { const value = event.target.value; setState(current => ({ ...current, persona: { ...current.persona, defaultMode: value } })); void save({ personaDefaultMode: value }) }, style: { ...control, width: 'auto' } },
               ...(state.persona?.modes || []).map(mode => h('option', { key: mode.id, value: mode.id }, `${mode.name}${mode.id === 'default' ? '（默认助手）' : ''}`))
